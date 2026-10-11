@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.6 (2026-10-11)
+
+- README: a GitHub Action section with a workflow example and the inputs table.
+- `action.yml`: a description that says what the check catches.
+
 ## 0.2.5 (2026-10-11)
 
 - A working contact address for questions and adoption help in the README

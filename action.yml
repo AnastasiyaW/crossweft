@@ -1,5 +1,5 @@
 name: Crossweft seam check
-description: Check that the seams between your components agree (annotations on the diff).
+description: Fail CI when a value copied between languages (API version, DTO field, env var) changes on one side only.
 author: HappyIn
 branding:
   icon: link

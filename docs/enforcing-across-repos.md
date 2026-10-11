@@ -58,7 +58,7 @@ Two details that matter in practice:
 If several repositories run Crossweft, pin one released version in all of them, and let
 the gate treat an unknown version as "not checked". In CI install it by the release
 commit, with the tag in a comment
-(`pip install "git+https://github.com/AnastasiyaW/crossweft.git@<commit>"  # v0.2.5`):
+(`pip install "git+https://github.com/AnastasiyaW/crossweft.git@<commit>"  # v0.2.6`):
 a tag can be moved by anyone with push access and would silently change what every
 repository runs; a commit cannot. A fix one repository needs goes to
 Crossweft first and arrives everywhere with the next release, instead of drifting into
