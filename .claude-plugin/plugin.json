@@ -1,10 +1,10 @@
 {
   "name": "crossweft",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Guides coding agents through locating and checking cross-component contracts with Crossweft.",
   "author": {"name": "HappyIn", "url": "https://happyin.ai"},
-  "homepage": "https://github.com/happyin-app/crossweft",
-  "repository": "https://github.com/happyin-app/crossweft",
+  "homepage": "https://github.com/AnastasiyaW/crossweft",
+  "repository": "https://github.com/AnastasiyaW/crossweft",
   "license": "Apache-2.0",
   "skills": ["./crossweft/skills/"],
   "keywords": ["contracts", "architecture", "drift", "polyglot", "guardrails"]

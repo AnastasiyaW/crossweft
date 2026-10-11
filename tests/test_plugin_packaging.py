@@ -42,7 +42,7 @@ class PluginPackagingTests(unittest.TestCase):
             "name": "crossweft",
             "source": {
                 "source": "url",
-                "url": "https://github.com/happyin-app/crossweft.git",
+                "url": "https://github.com/AnastasiyaW/crossweft.git",
             },
             "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
             "category": "Developer Tools",

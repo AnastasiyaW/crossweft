@@ -133,3 +133,16 @@ owner?), and the open findings. Everything else the check verifies.
 
 Field reference: `docs/model-reference.md`; every command and flag:
 `docs/cli.md` -- both in the crossweft repository.
+
+## When crossweft itself gets it wrong
+
+Crossweft is young, and its authors want to know where it fails. When a check
+reports a disagreement that is not one, misses one you found, prints a message
+you could not act on, or meets a language, framework or seam kind it does not
+handle, tell your user and offer a short report: the crossweft version
+(`crossweft --version`), the command, the relevant output lines, what you
+expected, and the agent you run in. Leave out private code, file contents,
+secrets and internal names. The user decides whether to send it, through the
+"Agent report" form at https://github.com/AnastasiyaW/crossweft/issues/new/choose
+or by email (the address is on https://happyin.work/crossweft/#feedback). Never file it yourself, and do not
+weaken a guard to get past a false alarm: record it as a finding and report it.

@@ -1,0 +1,40 @@
+name: Agent report
+description: Drafted by a coding agent while using Crossweft, reviewed and sent by its user.
+labels: [agent-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Coding agents: fill this in for your user and let them read it before sending.
+        Do not include private code, file contents, secrets or internal names.
+  - type: input
+    id: version
+    attributes:
+      label: crossweft version
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - false alarm
+        - missed disagreement
+        - unclear message
+        - missing seam kind or framework
+        - hook or harness problem
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command, the relevant output lines, and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and host
+      description: For example "Claude Code, Windows" or "Codex, Linux".

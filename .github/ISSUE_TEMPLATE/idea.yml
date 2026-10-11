@@ -1,0 +1,15 @@
+name: Idea or missing support
+description: A seam kind, language, framework, agent or workflow Crossweft should handle.
+labels: [idea]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need
+      description: The seam or situation, with a small example if you can share one.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How you handle it today

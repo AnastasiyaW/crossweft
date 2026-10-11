@@ -3629,7 +3629,7 @@ def sarif_payload(result: CheckResult, fallback: str = CONFIG_FILE) -> dict:
         "runs": [{
             "tool": {"driver": {
                 "name": "crossweft", "version": __version__,
-                "informationUri": "https://github.com/happyin-app/crossweft",
+                "informationUri": "https://github.com/AnastasiyaW/crossweft",
                 "rules": [rule(r) for r in sorted({row["ruleId"] for row in rows})]}},
             "invocations": [invocation],
             "results": rows,
@@ -5858,7 +5858,7 @@ def run_baseline(cfg: Config, owner: str | None, next_step: str | None,
     return 0
 
 
-MODEL_REFERENCE_URL = "https://github.com/happyin-app/crossweft/blob/main/docs/model-reference.md"
+MODEL_REFERENCE_URL = "https://github.com/AnastasiyaW/crossweft/blob/main/docs/model-reference.md"
 
 EXAMPLE_DIR = "crossweft-example"
 EXAMPLE_MODEL_FILE = "20-example.json"

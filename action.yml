@@ -1,9 +1,9 @@
-name: crossweft
+name: Crossweft seam check
 description: Check that the seams between your components agree (annotations on the diff).
 author: HappyIn
 branding:
   icon: link
-  color: blue
+  color: orange
 inputs:
   root:
     description: Repository directory that holds crossweft.json.

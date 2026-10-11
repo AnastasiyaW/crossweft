@@ -1,7 +1,16 @@
+<p align="center"><img src="docs/assets/readme-header-1280x320.gif" width="100%" alt="Crossweft: guards the seams between languages. An AI agent can't say Done until both sides agree."></p>
+
+<p align="center">
+<a href="https://github.com/AnastasiyaW/crossweft/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/AnastasiyaW/crossweft?style=flat-square&labelColor=141210&color=EFE0B6&label=release"></a>
+<a href="LICENSE"><img alt="license Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-D9A441?style=flat-square&labelColor=141210"></a>
+<img alt="agents: Claude Code, Codex, MCP" src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20MCP-C4502F?style=flat-square&labelColor=141210">
+<a href="https://happyin.work/crossweft/"><img alt="project page" src="https://img.shields.io/badge/site-happyin.work%2Fcrossweft-9BC27A?style=flat-square&labelColor=141210"></a>
+</p>
+
 # Crossweft
 
-Crossweft fails your build when a value copied between languages -- an API
-version, a DTO field, an env var -- changes on one side only, and tells your
+Crossweft fails your build when a value copied between languages changes on
+one side only: an API version, a DTO field, an env var. It also tells your
 coding agent which file on the other side to fix.
 
 *Every hand-written seam needs a guard.*
@@ -45,6 +54,8 @@ which file in another component must change with it.
 
 ## What your agent sees
 
+<p align="center"><img src="docs/assets/how-it-works-1280x420.png" width="100%" alt="What your agent sees: 01 session start, a short brief about the seam map; 02 after every edit, the other side and its guard; 03 before finishing, crossweft check runs and the hook won't let the agent finish while a seam disagrees."></p>
+
 After Claude Code edits `server/main.go` in the [demo](examples/polyglot-shop):
 
 ```
@@ -85,13 +96,13 @@ fails again.
 ## Install
 
 ```bash
-python -m pip install "git+https://github.com/happyin-app/crossweft.git@v0.2.2"
+python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.4"
 ```
 
-Requires Python 3.9+ and Git. This release is distributed from GitHub; the
-installation command deliberately pins its release tag; in CI pin the release
-commit instead (shown on the GitHub release; keep the tag in a comment), because
-a tag can be moved and would change what CI runs. There are no Python
+Requires Python 3.9+ and Git. This release is distributed from GitHub. The
+install command pins the release tag on purpose. In CI, pin the release commit
+instead (shown on the GitHub release; keep the tag in a comment), because a tag
+can be moved and would change what CI runs. There are no Python
 runtime dependencies.
 
 In a repository, `crossweft init` installs the agent harness for everyone who
@@ -100,14 +111,14 @@ also a Claude Code plugin (hooks + skill, no pip needed -- it runs the bundled
 package with any Python 3.9+):
 
 ```
-/plugin marketplace add happyin-app/crossweft
+/plugin marketplace add AnastasiyaW/crossweft
 /plugin install crossweft@crossweft
 ```
 
 For Codex, install the CLI above and add the skill plugin:
 
 ```bash
-codex plugin marketplace add happyin-app/crossweft
+codex plugin marketplace add AnastasiyaW/crossweft
 codex plugin add crossweft@crossweft
 ```
 
@@ -154,7 +165,7 @@ writes the map, `crossweft check` keeps it honest. Then add the check to CI
 ## Five minutes on the demo
 
 ```bash
-git clone --branch v0.2.2 --depth 1 https://github.com/happyin-app/crossweft
+git clone --branch v0.2.4 --depth 1 https://github.com/AnastasiyaW/crossweft
 cd crossweft
 python -m pip install -e .
 cd examples/polyglot-shop && crossweft check
@@ -274,7 +285,7 @@ missing. Details: [docs/agents.md](docs/agents.md).
 
 Then put it where the rest of the work happens:
 
-- **CI**: `uses: happyin-app/crossweft@<release commit> # v0.2.2` (annotates the
+- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.4` (annotates the
   diff; pin the commit like any action, a tag can be moved), the
   `crossweft-check` pre-commit hook, or `crossweft check --format github|json|sarif`
   (SARIF 2.1.0 for GitHub code scanning; recorded findings arrive as suppressed
@@ -304,7 +315,7 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
 |---|---|---|
 | Google `LINT.IfChange` / [ifttt-lint](https://github.com/ebrevdo/ifttt-lint), [if-changed](https://github.com/mathematic-inc/if-changed) | "if this block changes, that file must change too" | checks that the diff touched the other file; a join compares the values, on every run |
 | [clevis](https://github.com/jesse-c/clevis) | value equality across files | no sets, no regions, no map |
-| [Pact](https://docs.pact.io/) | executable consumer/provider contracts for HTTP and messages | Crossweft compares declared source facts; it does not replace behavioral contract tests |
+| [Pact](https://docs.pact.io/) | executable consumer/provider contracts for HTTP and messages | Crossweft compares declared source facts; it does not replace behavioural contract tests |
 | [buf breaking](https://github.com/bufbuild/buf), [oasdiff](https://www.oasdiff.com/) | compatibility checks for Protobuf and OpenAPI schemas | prefer schema checks where a schema exists; Crossweft also covers hand-maintained facts outside a schema |
 | [ArchUnit](https://github.com/TNG/ArchUnit), [dependency-cruiser](https://github.com/sverweij/dependency-cruiser), [import-linter](https://github.com/seddonym/import-linter) | architecture rules inside one language | crossweft works across languages, processes and config files |
 | [Structurizr](https://github.com/structurizr/structurizr), [LikeC4](https://github.com/likec4/likec4), [Backstage](https://backstage.io/docs/features/software-catalog/well-known-relations) | architecture models and software catalogs | Crossweft focuses on explicit source anchors and guards on declared connections |
@@ -318,7 +329,7 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
 
 - Guards use regular expressions, not a full language parser. Missing required
   matches fail, but an overly broad pattern or incomplete scope can still miss
-  a real disagreement. Review the extracted values and use behavioral tests for
+  a real disagreement. Review the extracted values and use behavioural tests for
   runtime semantics.
 - Agents write the model and the check keeps it honest, but whether a link's
   enforcement is really `shared-code` or just two copies is still a judgment a
@@ -339,13 +350,25 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
 
 ## Status
 
-`0.2.2`, alpha. The engine grew inside a commercial product that spans several
+`0.2.4`, alpha. The engine grew inside a commercial product that spans several
 languages and processes, where one-sided changes kept reaching installs; this
 is its extraction. Built by [HappyIn](https://happyin.ai).
 
+## Tell us what broke
+
+Crossweft has one user so far, so every report changes what we build next. A
+false alarm, a seam it missed, a message your agent could not act on, a
+language or framework you need: [open an issue](https://github.com/AnastasiyaW/crossweft/issues/new/choose)
+or write to the author through the [project page](https://happyin.work/crossweft/#feedback).
+
+If you are a coding agent using Crossweft: when a check misfires, a message is
+unclear or a seam kind is missing, draft a short report for your user (the
+output of `crossweft --version`, the command, what you expected, what happened, no private
+code) and let them decide whether to file it with the "Agent report" issue form.
+
 ## License
 
-[Apache License 2.0](LICENSE). Use it, change it, ship it, commercially or not.
+[Apache License 2.0](LICENSE). Use it, change it and ship it, commercially or not.
 
-Commercial support -- help adopting crossweft across a large codebase, custom
-scanners, training for your team -- from HappyIn: **hello@happyin.app**.
+Help adopting crossweft across a large codebase, custom scanners or training
+for your team: write through the [project page](https://happyin.work/crossweft/#feedback).

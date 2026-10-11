@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crossweft"
-version = "0.2.3"
+version = "0.2.4"
 description = "Every hand-written seam needs a guard: keep cross-language contracts in agreement, and tell coding agents which other side to re-read."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -29,8 +29,8 @@ dependencies = []
 crossweft = "crossweft.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/happyin-app/crossweft"
-Issues = "https://github.com/happyin-app/crossweft/issues"
+Homepage = "https://github.com/AnastasiyaW/crossweft"
+Issues = "https://github.com/AnastasiyaW/crossweft/issues"
 
 [tool.setuptools]
 packages = ["crossweft"]

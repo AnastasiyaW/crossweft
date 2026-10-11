@@ -1,0 +1,30 @@
+name: Something is wrong
+description: A false alarm, a missed seam, a crash, or a message nobody could act on.
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: crossweft version
+      description: Output of `crossweft --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: The command you ran and what it printed. Remove anything private.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Languages, frameworks, agent
+      description: For example "Go chi + TypeScript, Claude Code".

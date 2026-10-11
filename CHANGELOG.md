@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4 (2026-10-11)
+
+- The repository moved to `github.com/AnastasiyaW/crossweft`; GitHub redirects
+  the old address. Install commands, plugin manifests, the marketplace entry
+  and the docs name the new one.
+- Feedback: issue forms for a problem, an idea and an agent report; the skill
+  tells an agent, when crossweft itself gets something wrong, to draft a short
+  report for its user (no private code) and let the user decide whether to
+  send it; the README says where to write.
+- README: header and how-it-works images, a release badge that follows the
+  latest release, and a link to the project page.
+- `action.yml`: a Marketplace-ready name (`Crossweft seam check`) and colour.
+
 ## 0.2.3 (2026-10-11)
 
 - `validators.exclude` in `crossweft.json`: `{"validate_x.py": "<reason>"}` for a

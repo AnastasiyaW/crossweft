@@ -86,7 +86,7 @@ upgrading crossweft tells you to re-run `crossweft agents`.
 Install the plugin:
 
 ```
-/plugin marketplace add happyin-app/crossweft
+/plugin marketplace add AnastasiyaW/crossweft
 /plugin install crossweft@crossweft
 ```
 
@@ -112,7 +112,7 @@ Install the same public repository as a Codex marketplace, then install its
 `crossweft` plugin:
 
 ```
-codex plugin marketplace add happyin-app/crossweft
+codex plugin marketplace add AnastasiyaW/crossweft
 codex plugin add crossweft@crossweft
 ```
 
@@ -243,15 +243,15 @@ GitHub Action (annotates the diff):
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: happyin-app/crossweft@<release commit>  # v0.2.2; a tag can be moved, a commit cannot
+- uses: AnastasiyaW/crossweft@<release commit>  # v0.2.4; a tag can be moved, a commit cannot
 ```
 
 pre-commit:
 
 ```yaml
 repos:
-  - repo: https://github.com/happyin-app/crossweft
-    rev: v0.2.2
+  - repo: https://github.com/AnastasiyaW/crossweft
+    rev: v0.2.4
     hooks:
       - id: crossweft-check
 ```

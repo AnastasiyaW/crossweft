@@ -84,7 +84,7 @@ class OnboardingTest(unittest.TestCase):
     def test_model_comment_points_at_a_url(self) -> None:
         self.cmd("init", "--no-agents")
         body = json.loads((self.root / "seams/model/10-system.json").read_text(encoding="utf-8"))
-        self.assertIn("https://github.com/happyin-app/crossweft/", body["$comment"])
+        self.assertIn("https://github.com/AnastasiyaW/crossweft/", body["$comment"])
         self.assertIn("docs/model-reference.md", body["$comment"])
 
     def test_discover_with_nothing_found_prints_a_starter_snippet(self) -> None:

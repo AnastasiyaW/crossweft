@@ -58,7 +58,7 @@ Two details that matter in practice:
 If several repositories run Crossweft, pin one released version in all of them, and let
 the gate treat an unknown version as "not checked". In CI install it by the release
 commit, with the tag in a comment
-(`pip install "git+https://github.com/happyin-app/crossweft.git@<commit>"  # v0.2.2`):
+(`pip install "git+https://github.com/AnastasiyaW/crossweft.git@<commit>"  # v0.2.4`):
 a tag can be moved by anyone with push access and would silently change what every
 repository runs; a commit cannot. A fix one repository needs goes to
 Crossweft first and arrives everywhere with the next release, instead of drifting into
@@ -69,5 +69,5 @@ private copies of the engine.
 - It does not make a map honest: whether a link is really `shared-code` or two copies is
   still a review question.
 - It is only as strong as the agent harness: an agent without hooks runs no gate. For those,
-  run `crossweft check` in CI as well (`uses: happyin-app/crossweft@<tag>` or
+  run `crossweft check` in CI as well (`uses: AnastasiyaW/crossweft@<tag>` or
   `crossweft check --format sarif`).
