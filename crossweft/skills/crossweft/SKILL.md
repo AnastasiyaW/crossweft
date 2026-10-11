@@ -144,5 +144,5 @@ handle, tell your user and offer a short report: the crossweft version
 expected, and the agent you run in. Leave out private code, file contents,
 secrets and internal names. The user decides whether to send it, through the
 "Agent report" form at https://github.com/AnastasiyaW/crossweft/issues/new/choose
-or by email (the address is on https://happyin.work/crossweft/#feedback). Never file it yourself, and do not
+or by email (the address is in the crossweft README, "Tell us what broke"). Never file it yourself, and do not
 weaken a guard to get past a false alarm: record it as a finding and report it.

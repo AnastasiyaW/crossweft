@@ -96,7 +96,7 @@ fails again.
 ## Install
 
 ```bash
-python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.4"
+python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.5"
 ```
 
 Requires Python 3.9+ and Git. This release is distributed from GitHub. The
@@ -165,7 +165,7 @@ writes the map, `crossweft check` keeps it honest. Then add the check to CI
 ## Five minutes on the demo
 
 ```bash
-git clone --branch v0.2.4 --depth 1 https://github.com/AnastasiyaW/crossweft
+git clone --branch v0.2.5 --depth 1 https://github.com/AnastasiyaW/crossweft
 cd crossweft
 python -m pip install -e .
 cd examples/polyglot-shop && crossweft check
@@ -285,7 +285,7 @@ missing. Details: [docs/agents.md](docs/agents.md).
 
 Then put it where the rest of the work happens:
 
-- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.4` (annotates the
+- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.5` (annotates the
   diff; pin the commit like any action, a tag can be moved), the
   `crossweft-check` pre-commit hook, or `crossweft check --format github|json|sarif`
   (SARIF 2.1.0 for GitHub code scanning; recorded findings arrive as suppressed
@@ -350,7 +350,7 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
 
 ## Status
 
-`0.2.4`, alpha. The engine grew inside a commercial product that spans several
+`0.2.5`, alpha. The engine grew inside a commercial product that spans several
 languages and processes, where one-sided changes kept reaching installs; this
 is its extraction. Built by [HappyIn](https://happyin.ai).
 
@@ -359,7 +359,7 @@ is its extraction. Built by [HappyIn](https://happyin.ai).
 Crossweft has one user so far, so every report changes what we build next. A
 false alarm, a seam it missed, a message your agent could not act on, a
 language or framework you need: [open an issue](https://github.com/AnastasiyaW/crossweft/issues/new/choose)
-or write to the author through the [project page](https://happyin.work/crossweft/#feedback).
+or write to **crossweft@happyin.app**.
 
 If you are a coding agent using Crossweft: when a check misfires, a message is
 unclear or a seam kind is missing, draft a short report for your user (the
@@ -371,4 +371,4 @@ code) and let them decide whether to file it with the "Agent report" issue form.
 [Apache License 2.0](LICENSE). Use it, change it and ship it, commercially or not.
 
 Help adopting crossweft across a large codebase, custom scanners or training
-for your team: write through the [project page](https://happyin.work/crossweft/#feedback).
+for your team: **crossweft@happyin.app**.

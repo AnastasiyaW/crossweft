@@ -4,5 +4,5 @@ contact_links:
     url: https://happyin.work/crossweft/
     about: What Crossweft is, the seam demo and how to install it.
   - name: Write to the author
-    url: https://happyin.work/crossweft/#feedback
+    url: https://github.com/AnastasiyaW/crossweft#tell-us-what-broke
     about: Adopting Crossweft in a large codebase, custom scanners, training, or anything you would rather not post publicly.

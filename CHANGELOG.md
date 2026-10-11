@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.5 (2026-10-11)
+
+- A working contact address for questions and adoption help in the README
+  ("Tell us what broke"); the skill and the issue-form contact link point there.
+
 ## 0.2.4 (2026-10-11)
 
 - The repository moved to `github.com/AnastasiyaW/crossweft`; GitHub redirects
