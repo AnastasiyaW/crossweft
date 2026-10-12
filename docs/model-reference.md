@@ -29,6 +29,7 @@ At the repository root; it also marks the root. Every key is optional.
 | `validators` | -- | `{"dir": "scripts/validators", "timeout": 120, "timeouts": {"validate_x.py": 300}, "exclude": {"validate_gate.py": "commit gate"}}` for `crossweft validators` ([validators.md](validators.md)) |
 | `discover` | -- | `{"exclude": ["vendor/**", "**/*_test.go"]}` for `crossweft discover` |
 | `joints` | -- | `{"dir": "tools/joints"}`: where your [joint-kind plugins](#joint-kind-plugins) live. Optional `"sources"`: globs of the plugin files and the helpers they import, when `dir` also holds unrelated code -- `check --changed` then reruns the whole map only when one of those changes (default: any change under `dir`). A plugin that imports a helper from `dir`, or reads a file from `dir` while it is imported or checked, that neither `sources` nor the kind's inputs (entry paths, `IMPACT_GLOBS`) cover is an error (`joints:unlisted-read:<kind>:<path>`); globs match the way `--changed` does, part by part. `sources` may list any file, not only `.py`. A read is seen when the plugin runs, so a full check fails on it and an incremental check never records a pass over it; plain `--changed REV` assumes REV itself passed |
+| `hazards` | -- | `{"include": ["scripts/**/*"], "exclude": [], "rules": [...]}`: run the [built-in hazard rules](#built-in-hazard-rules) on these files (`rules` defaults to all). An `include` glob that names no file is a fatal `hazard-config:empty:<glob>` problem |
 
 ## `meta`
 
@@ -335,6 +336,34 @@ current content of each region's file. A finding therefore excuses one
 disagreement: when a value changes, or the same values move to other files, or
 a region changes again, the new problem fails and the old finding goes stale.
 Line numbers and line endings do not change the key, so moving code does not.
+
+
+## Built-in hazard rules
+
+Some seams are a line of script that runs without an error and still breaks
+what another program reads: a status file, an environment, an argument. With
+`"hazards": {"include": [...]}` in `crossweft.json`, `check` scans those files
+for four such lines. Each hit is an ordinary problem in the `hazards` category,
+keyed `hazard:<path>:<rule>:<digest>` (the digest is of the line's text, so
+moving the line keeps the key and changing it makes a new one); a deliberate
+use is recorded as a finding with its reason, like any other drift.
+
+| Rule | Flags | Safe form |
+|---|---|---|
+| `cmd-digit-redirect` | a variable expanded right before `>`/`>>` in batch text (`echo step=%RC%>>"log"`, also inside another language's string that generates a `.cmd`). When the value is one digit, cmd reads `0>>`/`1>>` as a stream handle: `step=0` is never written, `step=1` writes `step=`. | `>>"log" echo step=%RC%` |
+| `empty-to-zero` | numeric coercion of a parsed field that may be empty, with no digits-only check on the same or the three lines before: PowerShell `[int]$parts[1]`, `$x -as [int]`; Python `int(x or 0)`, `int(x) if x else 0`. An empty or missing status becomes 0 -- usually "success". It also fires on a deliberate count default (`total = int(n or 0)`); give that line a finding, or check the text first. | `if ($v -notmatch '^[0-9]+$') { <no verdict> }` / `if not v.isdigit(): raise ...`, then convert |
+| `toolchain-env-name` | `RC`, `CC`, `CXX`, `LIB`, `INCLUDE`, `LINK`, `CL`, `LIBPATH`, `_CL_` or `_LINK_` set (`set`, `$env:`, `SetEnvironmentVariable`, `export`) to a status -- a number, a verdict word (`ok`, `failed`, ...), an exit code (`%ERRORLEVEL%`, `$LASTEXITCODE`, `$?`) or a status-named variable (`%BUILD_RC%`) -- in a file that later runs cmake, msbuild, cl, make, ninja, meson, gcc/clang or cargo, or as a prefix of that run in a shell (`CC=1 make`). `set RC=%ERRORLEVEL%` before CMake: "Could not find compiler set in environment variable RC". A tool, a path, an option list, another variable, extending the variable (`%INCLUDE%;...`, `+=`) or clearing it is not flagged; neither is a run named only in an `echo`/`rem` line. | rename it (`BUILD_RC`) |
+| `glob-length-guard` | a `case` pattern of N `?` and one `*` (N >= 2) whose branch rejects (`exit`/`return` non-zero, `false`, `>&2`). It matches every value of N characters or more, so as "not exactly N" it refuses valid input. | `[ "${#REV}" -eq 40 ]`; for "longer than N", N+1 `?` |
+
+Rules match text, not a parse: a batch line is read with cmd's quoting
+(`"` and `^`) and its expansions left to right, shell comments and `case`
+nesting are honoured, and a comment line (`#`, `rem`, `::`) is skipped. A
+coercion split over two lines (`int(` then `x or 0)`), an `if` condition longer
+than 200 characters in `int(x) if ... else 0`, and a digits check on another
+element of the same variable (`$parts[0]` for `[int]$parts[1]`) are not told
+apart. A status-named variable is judged by the last `_` part of its name. Every
+pattern is linear in the input; the self-test times hostile lines. The planted unsafe and safe cases live in
+`crossweft/hazards.py` (`PLANTED`) and run in `crossweft self-test`.
 
 
 ## Joint-kind plugins

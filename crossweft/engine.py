@@ -73,7 +73,7 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from . import harness, i18n, joints
+from . import harness, hazards, i18n, joints
 from .scope import scope_hit
 
 SCHEMA_ID = "crossweft.map.v1"
@@ -90,7 +90,8 @@ TOP_LEVEL_KEYS = set(ENTITY_KEYS) | {"meta", "$comment"}
 RESERVED_JOINT_KINDS = (TOP_LEVEL_KEYS | {key.rstrip("s") for key in ENTITY_KEYS}
                         | {"anchor", "anchors", "route", "routes", "status", "provenance", "seam",
                            "seams", "evidence", "coverage", "agents", "escape", "path_case",
-                           "joints", "requirements", "freshness"})
+                           "joints", "requirements", "freshness", "hazard",
+                           "hazards"})
 
 KINDS = {"actor", "executable", "service", "component", "library", "store", "external",
          "artifact", "tool", "contract", "site", "host", "ci", "group"}
@@ -1065,6 +1066,9 @@ class Config:
     discover_exclude: list = dataclasses.field(default_factory=list)
     joints_dir: Path | None = None
     joints_sources: list = dataclasses.field(default_factory=list)
+    hazards_include: list = dataclasses.field(default_factory=list)
+    hazards_exclude: list = dataclasses.field(default_factory=list)
+    hazards_rules: list = dataclasses.field(default_factory=list)
 
     def abs(self, rel: Path) -> Path:
         return self.root / rel
@@ -1076,7 +1080,7 @@ class Config:
 
 CONFIG_KEYS = {"$comment", "model_dir", "output_dir", "lock_file", "viewer_template", "language",
                "requirements", "check_rendered_docs", "agent", "validators", "discover",
-               "joints"}
+               "joints", "hazards"}
 
 
 def find_repo_root(start: Path) -> Path:
@@ -1212,6 +1216,25 @@ def load_config(root: Path) -> Config:
                 raise ModelError(f"{CONFIG_FILE}: joints.sources must be a non-empty list of "
                                  "repository-relative globs")
             cfg.joints_sources = list(sources)
+    hazard_cfg = sub_object("hazards", {"include", "exclude", "rules"})
+    if hazard_cfg:
+        def globs(key: str, required: bool) -> list:
+            value = hazard_cfg.get(key, [])
+            if (required and not value) or not isinstance(value, list) or not all(
+                    isinstance(g, str) and g and not g.startswith(("/", "\\"))
+                    and ".." not in g.split("/") for g in value):
+                raise ModelError(f"{CONFIG_FILE}: hazards.{key} must be a "
+                                 f"{'non-empty ' if required else ''}list of "
+                                 "repository-relative globs")
+            return list(value)
+        cfg.hazards_include = globs("include", True)
+        cfg.hazards_exclude = globs("exclude", False)
+        rules = hazard_cfg.get("rules", sorted(hazards.RULES))
+        if not isinstance(rules, list) or not rules or not all(
+                isinstance(r, str) and r in hazards.RULES for r in rules):
+            raise ModelError(f"{CONFIG_FILE}: hazards.rules must be a non-empty list of "
+                             f"{sorted(hazards.RULES)}")
+        cfg.hazards_rules = list(rules)
     return cfg
 
 
@@ -3376,6 +3399,32 @@ class Checker:
         self.check_freshness()
         self.check_agents()
         self.check_joints()
+        self.check_hazards()
+
+    def check_hazards(self) -> None:
+        """Built-in hazard rules (crossweft/hazards.py) over the files named by
+        `hazards.include`. A glob that names no file is a loud error: a rule set
+        that silently scans nothing must not read as clean."""
+        cfg = self.model.cfg
+        if not cfg.hazards_include:
+            return
+        files, empty = self.expand_entries(cfg.hazards_include, cfg.hazards_exclude)
+        for pattern in empty:
+            self.add(f"hazard-config:empty:{pattern}", "hazards",
+                     f"hazards.include entry '{pattern}' names no file -- fix the glob or remove "
+                     f"it from {CONFIG_FILE}", fatal=True)
+        rules = set(cfg.hazards_rules)
+        for rel in files:
+            if not self.guard([rel], prefixes=(f"hazard:{rel}:",)):
+                continue
+            text = self.text(rel)
+            if text is None:
+                continue
+            self.items_checked += 1
+            hits = hazards.scan(rel, text, rules)
+            for hit, key in zip(hits, hazards.keys(rel, hits)):
+                self.add(key, "hazards", f"{hit.rule}: {hit.message} (`{hit.text}`)",
+                         path=rel, line=hit.line)
 
     def check_agents(self) -> None:
         """With agent.harness, the repository must carry its own agent harness
@@ -3525,7 +3574,7 @@ def evaluate(cfg: Config, changed: str | None = None,
 
 
 CATEGORIES = ("anchors", "joins", "sets", "pairs", "routes", "status", "provenance", "seams",
-              "evidence", "coverage", "agents", "joints")
+              "evidence", "coverage", "agents", "joints", "hazards")
 
 
 def _gh_escape(text: str, property_value: bool = False) -> str:
@@ -3552,6 +3601,7 @@ SARIF_RULES = {
     "coverage": "A source area is on no block of the map.",
     "agents": "The repository's agent harness is missing or out of date.",
     "joints": "A repository-specific joint plugin reports a disagreement or failed.",
+    "hazards": "Script text that silently breaks what another program reads (crossweft/hazards.py).",
     "stale-finding": "A recorded finding no longer reproduces and must be closed.",
     "render": "Generated documentation is out of date with the model.",
 }
@@ -3702,6 +3752,8 @@ def print_result(cfg: Config, result: CheckResult, fmt: str = "text") -> None:
         out(f"CROSSWEFT CHECK  model={cfg.model_dir.as_posix()}  {counts}")
         for category in CATEGORIES:
             rows = [p for p in result.new if p.category == category]
+            if category == "hazards" and not rows and not cfg.hazards_include:
+                continue        # an opt-in category: not shown where it is off
             if rows:
                 out(f"[FAIL] {category}: {len(rows)}")
                 for problem in rows:
@@ -5652,6 +5704,33 @@ def self_test() -> int:
         code, text = _captured(run_impact, load_config(root), None, ["server/main.go"])
         if code != 0 or "link:app-checkout" not in text:
             failures.append(f"impact command failed: {code}\n{text}")
+
+        # built-in hazard rules: the planted cases in hazards.PLANTED, then the
+        # rule set end to end -- each unsafe form red under its own key, the safe
+        # forms green, and a glob that names no file red (never "scanned nothing")
+        failures += hazards.self_test()
+        hazard_config = {**_SELF_TEST_CONFIG, "hazards": {"include": ["build/*"]}}
+        unsafe = {"build/run.cmd": 'echo step=%RC%>>"status.txt"\n',
+                  "build/read.ps1": "$code = [int]$parts[1]\n",
+                  "build/env.cmd": "set RC=%ERRORLEVEL%\ncmake --build out\n",
+                  "build/guard.sh": 'case "$SHA" in\n  ' + "?" * 40 + '*) exit 2 ;;\nesac\n'}
+        safe = {"build/run.cmd": '>>"status.txt" echo step=%RC%\n',
+                "build/read.ps1": "if ($parts[1] -notmatch '^[0-9]+$') { exit 2 }\n"
+                                  "$code = [int]$parts[1]\n",
+                "build/env.cmd": "set BUILD_RC=%ERRORLEVEL%\ncmake --build out\n",
+                "build/guard.sh": '[ "${#SHA}" -eq 40 ] || exit 2\n'}
+        for rel, rule in (("build/run.cmd", "cmd-digit-redirect"),
+                          ("build/read.ps1", "empty-to-zero"),
+                          ("build/env.cmd", "toolchain-env-name"),
+                          ("build/guard.sh", "glob-length-guard")):
+            failures += _expect(f"hazard {rule}", root, base, 1, f"hazard:{rel}:{rule}:",
+                                mutate_files={**safe, rel: unsafe[rel]}, config=hazard_config)
+        failures += _expect("hazards: safe forms pass", root, base, 0, "[OK]   hazards",
+                            mutate_files=safe, config=hazard_config)
+        failures += _expect("hazards: glob naming no file", root, base, 1,
+                            "hazard-config:empty:tools/*.cmd", mutate_files=safe,
+                            config={**_SELF_TEST_CONFIG,
+                                    "hazards": {"include": ["build/*", "tools/*.cmd"]}})
     if failures:
         for failure in failures:
             out(f"[SELF-TEST FAIL] {failure}")
@@ -5660,7 +5739,8 @@ def self_test() -> int:
     out("[OK] crossweft engine self-test passed (anchors, joins incl. every-occurrence and "
         "multi-group, sets, pairs incl. attest/whitespace/stale lock, findings, routes incl. "
         "regex scanner, provenance, seams, status, coverage, schema, path escape, strict config, "
-        "init, render in every language, github/json output, impact, joint plugins)")
+        "init, render in every language, github/json output, impact, joint plugins, "
+        "hazards)")
     out(f"SELF-TEST: checks={checks}")
     return 0
 

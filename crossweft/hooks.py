@@ -214,6 +214,8 @@ ADVICE = {
               "identifiers.route in {model}, or remove the dead route/call.",
     "map": "The map is incomplete: declare contract.enforcement, add the missing guard or "
            "anchors in {model} (see the crossweft skill).",
+    "hazards": "A script line breaks what another program reads (see each rule's safe "
+               "form): rewrite it that way. Only a deliberate use gets a finding with its reason.",
     "other": "Fix what the lines above name.",
 }
 DRIFT = {"joins", "sets", "pairs", "joints"}

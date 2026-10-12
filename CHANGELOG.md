@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.7 (2026-10-12)
+
+- Built-in hazard rules, opt-in with `"hazards": {"include": [globs]}` in
+  `crossweft.json` (optional `exclude`, `rules`): script lines that run without
+  an error and still break what another program reads. `cmd-digit-redirect`
+  (`echo x=%V%>>file` loses a one-digit value to a stream handle),
+  `empty-to-zero` (`[int]$parts[1]`, `int(x or 0)` turn a missing status into 0),
+  `toolchain-env-name` (`set RC=%ERRORLEVEL%` before cmake/cl/msbuild/make) and
+  `glob-length-guard` (`case` `??..?*` reject branch refuses exactly-N input).
+  Hits are `hazards` problems keyed by a digest of the line, excusable by a
+  finding; an `include` glob that names no file is fatal. Planted unsafe and
+  safe cases run in `crossweft self-test`; see docs/model-reference.md.
+
 ## 0.2.6 (2026-10-11)
 
 - README: a GitHub Action section with a workflow example and the inputs table.

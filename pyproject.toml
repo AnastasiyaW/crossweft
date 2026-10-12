@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "crossweft"
-version = "0.2.6"
+version = "0.2.7"
 description = "Every hand-written seam needs a guard: keep cross-language contracts in agreement, and tell coding agents which other side to re-read."
 readme = "README.md"
 requires-python = ">=3.9"
