@@ -268,6 +268,46 @@
           "path": ".claude-plugin/plugin.json",
           "side": "plugin",
           "regex": "\"version\": \"([^\"]+)\""
+        },
+        {
+          "path": ".codex-plugin/plugin.json",
+          "side": "codex-plugin",
+          "regex": "\"version\": \"([^\"]+)\""
+        },
+        {
+          "path": "README.md",
+          "side": "readme-install",
+          "regex": "crossweft(?:\\.git)?@v(\\d+\\.\\d+\\.\\d+[\\w.-]*)"
+        },
+        {
+          "path": "README.md",
+          "side": "readme-ci-pin",
+          "regex": "crossweft(?:\\.git)?@<[^>]+>\\\"?`? ?\\s*#\\s*v(\\d+\\.\\d+\\.\\d+[\\w.-]*)"
+        },
+        {
+          "path": "README.md",
+          "side": "readme-clone",
+          "regex": "--branch v(\\d+\\.\\d+\\.\\d+[\\w.-]*)[^\\n]*crossweft"
+        },
+        {
+          "path": "README.md",
+          "side": "readme-status",
+          "regex": "^`(\\d+\\.\\d+\\.\\d+[\\w.-]*)`, alpha"
+        },
+        {
+          "path": "docs/agents.md",
+          "side": "docs-agents-ci-pin",
+          "regex": "crossweft(?:\\.git)?@<[^>]+>\\\"?`? ?\\s*#\\s*v(\\d+\\.\\d+\\.\\d+[\\w.-]*)"
+        },
+        {
+          "path": "docs/agents.md",
+          "side": "docs-agents-precommit",
+          "regex": "crossweft\\s*\\n\\s*rev: v(\\d+\\.\\d+\\.\\d+[\\w.-]*)"
+        },
+        {
+          "path": "docs/enforcing-across-repos.md",
+          "side": "docs-enforcing-pin",
+          "regex": "crossweft(?:\\.git)?@<[^>]+>\\\"?`? ?\\s*#\\s*v(\\d+\\.\\d+\\.\\d+[\\w.-]*)"
         }
       ]
     },

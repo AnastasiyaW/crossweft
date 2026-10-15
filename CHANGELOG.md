@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.8 (2026-10-15)
+
+- The README, `docs/agents.md` and `docs/enforcing-across-repos.md` named 0.2.6 in their
+  install, clone and CI examples while the package was 0.2.7, so a reader installed the
+  previous release. They now name this release, and this repository's own map compares
+  each of those install, clone, CI and pre-commit examples, the README status line and the
+  Codex plugin manifest with the package version, so these examples can no longer drift
+  from the release.
+
 ## 0.2.7 (2026-10-12)
 
 - Built-in hazard rules, opt-in with `"hazards": {"include": [globs]}` in
