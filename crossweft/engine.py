@@ -1403,6 +1403,7 @@ def _fields(kind: str) -> dict[str, tuple[bool, object]]:
             "from_anchors": (False, "anchors"), "to_anchors": (False, "anchors"),
             "evidence": (False, ("enum", set(EVIDENCE))), "notes": (False, "str"),
             "requirements": (False, "reqs"), "envs": (False, "str-list"),
+            "gone": (False, "gone"),
         },
         "flows": {
             "id": (True, "id"), "name": (True, "str"), "status": (True, ("enum", set(STATUSES))),
@@ -1565,6 +1566,21 @@ def _check_value(model: Model, value: object, vtype: object, label: str) -> list
                 if kind == "route":
                     errors += [f"{label}.route: '{e}' must be 'METHOD /path'"
                                for e in entries if not ROUTE_DECL_RE.match(e)]
+    elif vtype == "gone":
+        if not isinstance(value, dict):
+            errors.append(f"{label}: must be an object {{status, replaced_by?, note?}}")
+        else:
+            unknown = set(value) - {"status", "replaced_by", "note"}
+            if unknown:
+                errors.append(f"{label}: unknown key(s) {sorted(unknown)}")
+            status = value.get("status")
+            if isinstance(status, bool) or not isinstance(status, int) or not 400 <= status <= 599:
+                errors.append(f"{label}.status: the HTTP status the retired route still answers "
+                              "with (400-599, usually 410)")
+            if "replaced_by" in value:
+                errors += _check_value(model, value["replaced_by"], "link", f"{label}.replaced_by")
+            if "note" in value:
+                errors += _check_value(model, value["note"], "str", f"{label}.note")
     elif vtype == "waits":
         if not isinstance(value, list):
             errors.append(f"{label}: must be a list")
@@ -1942,6 +1958,26 @@ def _validate_schema(model: Model) -> list[str]:
     for link in model.entities["links"]:
         if link.get("from") == link.get("to"):
             errors.append(f"{model.where(link)}: link '{link.get('id')}' connects a block to itself")
+        if isinstance(link.get("gone"), dict):
+            label = f"{model.where(link)}: link '{link.get('id')}' gone"
+            if link.get("status") != "legacy":
+                errors.append(f"{label}: only a legacy link can be gone (it describes a retired "
+                              "route the server still answers)")
+            routes = (link.get("identifiers") or {}).get("route")
+            if not routes:
+                errors.append(f"{label}: needs identifiers.route -- the retired routes")
+            for route in routes if isinstance(routes, list) else []:
+                # a glob or a mount would also cover live routes nobody maps
+                if isinstance(route, str) and ("*" in route
+                                               or route.startswith(("MOUNT ", "ANY "))):
+                    errors.append(f"{label}: '{route}' -- a gone route names one exact route "
+                                  "with one method: no glob, no ANY, no MOUNT")
+            if not link.get("to_anchors"):
+                errors.append(f"{label}: needs to_anchors -- where the server answers them")
+            successor = model.links.get(link["gone"].get("replaced_by") or "")
+            if successor is not None and successor.get("status") != "current":
+                errors.append(f"{label}.replaced_by: '{successor['id']}' is {successor.get('status')}, "
+                              "not current")
     for finding in model.entities["findings"]:
         label = f"{model.where(finding)}: finding {finding.get('id')}"
         if finding.get("status") in ("open", "accepted"):
@@ -2973,8 +3009,10 @@ class Checker:
         # only current links describe what runs today: a planned link may name a
         # route nobody serves yet, and a legacy link must not "map" a live route
         current = [d for d in declared if d[2]["status"] == "current"]
-        elsewhere = [d for d in declared if d[2]["status"] != "current"]
+        gone = [d for d in declared if d[2]["status"] == "legacy" and d[2].get("gone")]
+        elsewhere = [d for d in declared if d[2]["status"] != "current" and not d[2].get("gone")]
         mapped = RouteIndex(current)
+        retired = RouteIndex(gone)
         # Two guards, because the two halves read different files. Under
         # `check --changed` the model is unchanged -- a changed model file, and
         # with it meta.route_scan and every link's routes, makes change_scope
@@ -2993,17 +3031,18 @@ class Checker:
         #    an unchanged client still calls is caught by the server half as
         #    route:unserved (the link still declares it; a link that drops it
         #    is a model change, hence a full check).
-        self.check_route_servers(scan, current, elsewhere, mapped)
-        self.check_route_clients(scan, mapped)
+        self.check_route_servers(scan, current, elsewhere, mapped, gone, retired)
+        self.check_route_clients(scan, mapped, retired)
 
     def check_route_servers(self, scan: dict, current: list, elsewhere: list,
-                            mapped: RouteIndex) -> None:
+                            mapped: RouteIndex, gone: list, retired: RouteIndex) -> None:
         routers = scan.get("routers", [])
         feeds = ([router["path"] for router in routers] + scan.get("router_search", [])
                  + [entry["path"] for entry in scan.get("ignore_routers", [])])
         if not self.guard(feeds, keys=("anchor:route-scan:empty", "route:no-server-block")
                           + tuple(f"anchor:route-scan:{router['path']}" for router in routers),
                           prefixes=("route:unmapped:", "route:unserved:", "route:unscannable:",
+                                    "route:gone-unserved:",
                                     "route:bad-method:", "route:scan-empty:",
                                     "route:unscanned-router:", "route:stale-ignore:")):
             return
@@ -3044,7 +3083,7 @@ class Checker:
                          fatal=True)
         unmapped_elsewhere = RouteIndex(elsewhere)
         for method, path, rel, line in registered:
-            if not mapped.covering(method, path):
+            if not mapped.covering(method, path) and not retired.covering(method, path):
                 other = sorted({link["id"] for link in unmapped_elsewhere.covering(method, path)})
                 detail = (f"only non-current link(s) declare it: {', '.join(other)}"
                           if other else "no mapped link declares it")
@@ -3065,12 +3104,24 @@ class Checker:
                 self.add(f"route:unserved:{d_method} {d_path}", "routes",
                          f"link:{link['id']} says the server serves {d_method} {d_path}, "
                          f"but no registration exists")
+        for d_method, d_path, link in gone:
+            if not (set(self.model.ancestors(link["to"])) & servers) or d_method == "MOUNT":
+                continue
+            if not served.serves(d_method, d_path):
+                self.add(f"route:gone-unserved:{d_method} {d_path}", "routes",
+                         f"link:{link['id']} says the server still answers the retired "
+                         f"{d_method} {d_path} with {link['gone']['status']}, but no registration "
+                         "exists -- drop it from the map, or keep the tombstone registered")
 
-    def check_route_clients(self, scan: dict, mapped: RouteIndex) -> None:
-        """Client literals must be explained by a mapped link."""
+    def check_route_clients(self, scan: dict, mapped: RouteIndex,
+                            retired: RouteIndex | None = None) -> None:
+        """Client literals must be explained by a mapped link, and must not name a
+        route that is only kept to answer that it is gone."""
+        retired = retired or RouteIndex([])
         globs = scan.get("client_globs", [])
         if not globs or not self.guard(globs, keys=("anchor:route-scan:client",),
-                                       prefixes=("route:client-unexplained:",)):
+                                       prefixes=("route:client-unexplained:",
+                                                 "route:gone-called:")):
             return
         literal_res = [re.compile(expr) for expr in scan.get("client_literal_regexes", [])]
         client_files = self.expand(globs, scan.get("client_exclude", []))
@@ -3084,9 +3135,10 @@ class Checker:
             # file skipped those findings are "not re-checked", never stale.
             changed = [rel for rel in client_files if self.in_scope([rel])]
             if len(changed) < len(client_files):
-                self.skipped_prefixes.append("route:client-unexplained:")
+                self.skipped_prefixes += ["route:client-unexplained:", "route:gone-called:"]
             client_files = changed
         unexplained: dict[str, list[tuple[str, int]]] = {}
+        called_gone: dict[str, list[tuple[str, int]]] = {}
         literal_count = 0
         for rel in client_files:
             text = self.text(rel) or ""
@@ -3096,14 +3148,25 @@ class Checker:
                     if literal is None:
                         continue       # the group did not take part: no literal here
                     literal_count += 1
-                    if not mapped.explains(literal):
-                        unexplained.setdefault(literal, []).append(
-                            (rel, self.line_at(rel, match.start())))
+                    if mapped.explains(literal):
+                        continue
+                    where = (rel, self.line_at(rel, match.start()))
+                    norm = self._norm_route_path(literal)
+                    if not norm.endswith("/") and retired.explains(literal):
+                        called_gone.setdefault(literal, []).append(where)
+                    else:
+                        unexplained.setdefault(literal, []).append(where)
         self.items_checked += literal_count
         for literal, places in sorted(unexplained.items()):
             shown = ", ".join(sorted({rel for rel, _ in places})[:3])
             self.add(f"route:client-unexplained:{literal}", "routes",
                      f"client literal {literal!r} (in {shown}) is not explained by any mapped link",
+                     path=places[0][0], line=places[0][1])
+        for literal, places in sorted(called_gone.items()):
+            shown = ", ".join(sorted({rel for rel, _ in places})[:3])
+            self.add(f"route:gone-called:{literal}", "routes",
+                     f"client literal {literal!r} (in {shown}) names a retired route the server "
+                     "only keeps to answer that it is gone -- call its replacement",
                      path=places[0][0], line=places[0][1])
 
     # ----------------------------------------------------- model consistency

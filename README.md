@@ -96,7 +96,7 @@ fails again.
 ## Install
 
 ```bash
-python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.8"
+python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.9"
 ```
 
 Requires Python 3.9+ and Git. This release is distributed from GitHub. The
@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: AnastasiyaW/crossweft@<release commit>  # v0.2.8
+      - uses: AnastasiyaW/crossweft@<release commit>  # v0.2.9
 ```
 
 Pin the release commit shown on the [release page](https://github.com/AnastasiyaW/crossweft/releases/latest):
@@ -192,7 +192,7 @@ release tags here are immutable, but a commit cannot move at all.
 ## Five minutes on the demo
 
 ```bash
-git clone --branch v0.2.8 --depth 1 https://github.com/AnastasiyaW/crossweft
+git clone --branch v0.2.9 --depth 1 https://github.com/AnastasiyaW/crossweft
 cd crossweft
 python -m pip install -e .
 cd examples/polyglot-shop && crossweft check
@@ -312,7 +312,7 @@ missing. Details: [docs/agents.md](docs/agents.md).
 
 Then put it where the rest of the work happens:
 
-- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.8` (annotates the
+- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.9` (annotates the
   diff; pin the commit like any action, a tag can be moved), the
   `crossweft-check` pre-commit hook, or `crossweft check --format github|json|sarif`
   (SARIF 2.1.0 for GitHub code scanning; recorded findings arrive as suppressed
@@ -377,7 +377,7 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
 
 ## Status
 
-`0.2.8`, alpha. The engine grew inside a commercial product that spans several
+`0.2.9`, alpha. The engine grew inside a commercial product that spans several
 languages and processes, where one-sided changes kept reaching installs; this
 is its extraction. Built by [HappyIn](https://happyin.ai).
 

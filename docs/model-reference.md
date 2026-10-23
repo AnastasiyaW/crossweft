@@ -74,6 +74,7 @@ Who passes what to whom.
 | `from_anchors`, `to_anchors` | when that end has code | where each side implements the link |
 | `identifiers` | no | `{"route": ["GET /v1/x"], "header": [...], "env": [...], "pipe": [...], ...}` |
 | `carries`, `returns` | no | data ids this link carries (`returns`: back to the caller) |
+| `gone` | no | legacy links only: `{"status": 410, "replaced_by"?: "<current link id>", "note"?}` -- the retired routes in `identifiers.route` are still registered on purpose and answer `status` (see [Routes](#routes)) |
 | `label`, `sync`, `waits`, `on_error`, `evidence`, `envs`, `notes`, `requirements` | no | documentation fields |
 
 ### `contract.enforcement`
@@ -292,6 +293,26 @@ serves yet; a legacy link does not map a live one): every registered route
 belongs to a link's `identifiers.route`; every declared route of a link into the
 `route_server` block is registered; every client literal is explained by a
 declared route (a literal ending in `/` is a prefix, `*` globs are allowed).
+
+**Retired routes kept as tombstones.** A route you retired but still register,
+so that old clients get a clear `410 Gone` instead of a `404`, goes on a
+`legacy` link with `gone`:
+
+```json
+{"id": "old-checkout", "from": "web", "to": "api", "transport": "https",
+ "status": "legacy", "summary": "retired; answers 410 checkout_retired",
+ "identifiers": {"route": ["POST /v1/old-checkout"]},
+ "to_anchors": [{"path": "server/main.go", "find": "retiredCheckout"}],
+ "gone": {"status": 410, "replaced_by": "web-api"}}
+```
+
+Such a route is mapped (no `route:unmapped`, no finding needed), and two
+checks watch it: the tombstone must stay registered
+(`route:gone-unserved:<METHOD> <path>` -- drop the route from the map or keep
+serving it), and a client literal that names it exactly is
+`route:gone-called:<literal>` (live code calling a route that only answers that
+it is gone). `gone` needs `identifiers.route` and `to_anchors` (where the
+server answers it); `replaced_by` must name a current link.
 
 ## `data`
 

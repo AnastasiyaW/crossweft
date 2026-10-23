@@ -225,6 +225,9 @@ def build_parser() -> argparse.ArgumentParser:
     val.add_argument("--dir", help="validators directory (default: validators.dir in "
                                    "crossweft.json)")
     val.add_argument("--self-test", action="store_true", help="prove the runner itself works")
+    val.add_argument("--incremental", action="store_true",
+                     help="reuse a phase that passed last time when nothing it read changed "
+                          "(for the stop hook; CI runs everything)")
 
     hook = sub.add_parser("hook", help="agent hook adapter (reads the agent's JSON on stdin)",
         description="Agent hook adapter: read the agent's JSON on stdin and answer in that "
@@ -355,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
         if not directory.is_absolute():
             directory = cfg.root / directory
         return runner.run_validators(cfg.root, directory, cfg.validator_timeout,
-                                     cfg.validator_timeouts, cfg.validator_exclude)
+                                     cfg.validator_timeouts, cfg.validator_exclude,
+                                     incremental=args.incremental)
     parser.print_help()
     return 2

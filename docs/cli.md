@@ -181,9 +181,11 @@ a real self-test, or reports a finding. Details: [validators.md](validators.md).
 |---|---|
 | `--dir DIR` | validators directory (default `validators.dir` in `crossweft.json`) |
 | `--self-test` | prove the runner itself works |
+| `--incremental` | reuse a self-test or normal run that passed last time when nothing it read, listed, checked or asked git has changed (kept in the git directory; see [validators.md](validators.md#incremental-runs-the-stop-hook)). For the stop hook; CI runs plain `validators` |
 
 ```bash
 crossweft validators
+crossweft validators --incremental
 ```
 
 ## `crossweft mcp`

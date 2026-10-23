@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.9 (2026-10-23)
+
+- `crossweft validators --incremental` for the stop hook: a self-test or normal run
+  that passed last time is reused while everything it observed is unchanged -- the
+  bytes of the files it read, the directories it listed, the paths it checked, the
+  environment variables it read, the output of the read-only `git` commands it ran,
+  the validator itself and the runtime. The runner learns this by tracing each run
+  (Python audit hooks, also in Python child processes). A run that starts any other
+  program, forks, uses a socket, a database driver or `ctypes`, or has a child that
+  did not report, is never reused; failures are never kept; a kept run expires after
+  24 hours. The report marks reused rows, says why a kept run ran again (the first
+  input that changed), and names every run that could not be kept, with the reason. Validators see `CROSSWEFT_VALIDATORS_INCREMENTAL=1`. CI runs plain
+  `crossweft validators`.
+- `gone` on a legacy link maps a retired route the server still answers on purpose
+  (`{"status": 410, "replaced_by": "<current link>"}`): it no longer needs a finding as
+  `route:unmapped`, removing the tombstone is `route:gone-unserved`, and a client
+  literal that still names it is `route:gone-called`.
+
 ## 0.2.8 (2026-10-15)
 
 - The README, `docs/agents.md` and `docs/enforcing-across-repos.md` named 0.2.6 in their

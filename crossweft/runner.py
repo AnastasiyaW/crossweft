@@ -61,8 +61,11 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+from . import vcache
 
 # Fan-out ceiling. Each worker only babysits child interpreters, so the useful
 # width is bounded by how many validators are slow rather than by cores -- and a
@@ -91,7 +94,7 @@ PASSING_VERDICTS = ("PASS", "SKIP")
 class Result:
     __slots__ = ("name", "self_test", "scanned_files", "scanned_items",
                  "normal_exit", "verdict", "detail", "failure_output",
-                 "applicability")
+                 "applicability", "reused", "not_reusable", "ran_again")
 
     def __init__(self, name: str) -> None:
         self.name = name
@@ -103,10 +106,13 @@ class Result:
         self.detail = ""
         self.failure_output = ""    # bounded captured output for FAIL reporting
         self.applicability = ""     # reason text when the validator declared SKIP
+        self.reused: list[str] = []  # phases taken from the last pass (--incremental)
+        self.not_reusable = ""      # why a phase that ran cannot be reused next time
+        self.ran_again: list[str] = []  # why a kept phase was not reused this time
 
 
-def _run(py_args: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT
-         ) -> subprocess.CompletedProcess:
+def _run(py_args: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT,
+         env: dict | None = None) -> subprocess.CompletedProcess:
     """Run `python <py_args>` capturing stdout+stderr as text. Force UTF-8 so a
     validator's SCANNED line is decodable regardless of console codepage.
 
@@ -120,7 +126,7 @@ def _run(py_args: list[str], cwd: Path, timeout: int = DEFAULT_TIMEOUT
     command = [sys.executable, *py_args]
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(command, cwd=str(cwd), stdout=out, stderr=err,
-                                stdin=subprocess.DEVNULL, env=_utf8_env(),
+                                stdin=subprocess.DEVNULL, env=env or _utf8_env(),
                                 start_new_session=os.name != "nt")
         try:
             proc.wait(timeout=timeout)
@@ -239,7 +245,108 @@ def _has_self_test_flag(script: Path) -> bool:
         return False
 
 
-def evaluate_validator(script: Path, cwd: Path) -> Result:
+class Reuse:
+    """--incremental: the store of passing phases and the environment children get."""
+
+    def __init__(self, root: Path) -> None:
+        self.env = _utf8_env()
+        self.env[vcache.INCREMENTAL_ENV] = "1"
+        self.path = _reuse_record_path(root)
+        self.store = vcache.Store(self.path, vcache.runtime_key())
+        self.lock = threading.Lock()
+        self.checked: dict[str, tuple[dict | None, str]] = {}
+
+    def prepare(self, scripts: list[Path]) -> None:
+        """Check every kept phase before any validator runs, in parallel, each path
+        stated and hashed once (validators share most of what they read)."""
+        jobs = [(f"{s.name}:{phase}", s) for s in scripts for phase in ("self-test", "normal")
+                if self.store.get(f"{s.name}:{phase}") is not None]
+        probe = vcache.Probe()
+
+        def check(job: tuple[str, Path]) -> tuple[str, tuple[dict | None, str]]:
+            key, script = job
+            entry = self.store.get(key)
+            why = vcache.changed(entry, script, self.env, probe)
+            if why or not isinstance(entry.get("outcome"), dict):
+                return key, (None, why)
+            return key, (entry["outcome"], "")
+
+        if jobs:
+            with ThreadPoolExecutor(max_workers=min(16, len(jobs))) as pool:
+                self.checked = dict(pool.map(check, jobs))
+
+    def lookup(self, key: str, script: Path) -> tuple[dict | None, str]:
+        """(the kept outcome, "") to reuse, or (None, why it runs again)."""
+        if key in self.checked:
+            return self.checked[key]
+        with self.lock:
+            entry = self.store.get(key)
+        if entry is None:
+            return None, ""
+        why = vcache.changed(entry, script, self.env)
+        if why or not isinstance(entry.get("outcome"), dict):
+            return None, why
+        return entry["outcome"], ""
+
+    def record(self, key: str, entry: dict | None) -> None:
+        with self.lock:
+            self.store.put(key, entry)
+
+
+def _reuse_record_path(root: Path) -> Path | None:
+    """Per work tree, in the git directory; None outside git (nothing is kept)."""
+    try:
+        done = subprocess.run(["git", "rev-parse", "--git-path", vcache.RECORD_NAME],
+                              cwd=str(root), capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode != 0 or not done.stdout.strip():
+        return None
+    path = Path(done.stdout.strip())
+    return path if path.is_absolute() else root / path
+
+
+class _Phase:
+    """One run of a validator (its self-test or its normal run). Under --incremental it
+    is either taken from the last pass (`outcome` set, nothing runs) or run traced and,
+    when it passes, recorded for next time."""
+
+    def __init__(self, script: Path, cwd: Path, args: list[str], reuse: "Reuse | None",
+                 name: str) -> None:
+        self.script, self.reuse, self.key = script, reuse, f"{script.name}:{name}"
+        self.name, self.trace_dir, self.outcome, self.why = name, None, None, ""
+        if reuse is not None:
+            self.outcome, self.why = reuse.lookup(self.key, script)
+            if self.outcome is not None:
+                self.done = None
+                return
+            self.trace_dir = vcache.new_trace_dir()
+        env = vcache.traced_env(reuse.env, self.trace_dir) if reuse is not None else None
+        try:
+            self.done = _run([str(script), *args], cwd, _timeout_for(script), env)
+        except BaseException:
+            self.forget()
+            raise
+
+    def forget(self) -> None:
+        if self.reuse is not None:
+            vcache.discard(self.trace_dir)
+            self.reuse.record(self.key, None)
+
+    def keep(self, outcome: dict, r: Result) -> None:
+        if self.reuse is None or self.trace_dir is None:
+            return
+        entry, reason = vcache.snapshot(self.trace_dir, self.script, self.reuse.env)
+        self.trace_dir = None
+        if entry is None:
+            r.not_reusable = f"{self.name}: {reason}"
+            self.reuse.record(self.key, None)
+            return
+        entry["outcome"] = outcome
+        self.reuse.record(self.key, entry)
+
+
+def evaluate_validator(script: Path, cwd: Path, reuse: "Reuse | None" = None) -> Result:
     r = Result(script.name)
 
     # --- contract 1: has --self-test, and it passes -------------------------
@@ -250,58 +357,81 @@ def evaluate_validator(script: Path, cwd: Path) -> Result:
         return r
 
     try:
-        st = _run([str(script), "--self-test"], cwd, _timeout_for(script))
+        st = _Phase(script, cwd, ["--self-test"], reuse, "self-test")
     except subprocess.TimeoutExpired as exc:
         r.self_test = "FAIL"
         r.verdict = "FAIL"
         r.detail = f"self-test timed out after {exc.timeout:.0f}s"
         r.failure_output = _failure_output(exc.output, exc.stderr)
         return r
-    if st.returncode != 0:
-        r.self_test = "FAIL"
-        r.verdict = "FAIL"
-        r.detail = f"self-test exit {st.returncode}"
-        r.failure_output = _failure_output(st.stdout, st.stderr)
-        return r
-    marker = SELF_TEST_RE.search((st.stdout or "") + "\n" + (st.stderr or ""))
-    if marker is None or int(marker.group(1)) <= 0:
-        r.self_test = "FAIL"
-        r.verdict = "FAIL"
-        r.detail = ("self-test exited 0 but printed no 'SELF-TEST: checks=<n>' line with n > 0 "
-                    "-- cannot prove the self-test path ran")
-        r.failure_output = _failure_output(st.stdout, st.stderr)
-        return r
+    if st.why:
+        r.ran_again.append(f"self-test: {st.why}")
+    if st.outcome is not None:
+        r.reused.append("self-test")
+    else:
+        done = st.done
+        if done.returncode != 0:
+            st.forget()
+            r.self_test = "FAIL"
+            r.verdict = "FAIL"
+            r.detail = f"self-test exit {done.returncode}"
+            r.failure_output = _failure_output(done.stdout, done.stderr)
+            return r
+        marker = SELF_TEST_RE.search((done.stdout or "") + "\n" + (done.stderr or ""))
+        if marker is None or int(marker.group(1)) <= 0:
+            st.forget()
+            r.self_test = "FAIL"
+            r.verdict = "FAIL"
+            r.detail = ("self-test exited 0 but printed no 'SELF-TEST: checks=<n>' line with n > 0 "
+                        "-- cannot prove the self-test path ran")
+            r.failure_output = _failure_output(done.stdout, done.stderr)
+            return r
+        st.keep({"checks": int(marker.group(1))}, r)
     r.self_test = "PASS"
 
     # --- contracts 2 & 3: normal run exits 0 AND proves work via SCANNED ----
     try:
-        nr = _run([str(script)], cwd, _timeout_for(script))
+        nr = _Phase(script, cwd, [], reuse, "normal")
     except subprocess.TimeoutExpired as exc:
         r.verdict = "FAIL"
         r.detail = f"normal run timed out after {exc.timeout:.0f}s"
         r.failure_output = _failure_output(exc.output, exc.stderr)
         return r
-    r.normal_exit = nr.returncode
-    out = (nr.stdout or "") + "\n" + (nr.stderr or "")
+    if nr.why:
+        r.ran_again.append(f"normal: {nr.why}")
+    if nr.outcome is not None:
+        r.reused.append("normal")
+        r.normal_exit = 0
+        r.scanned_files = int(nr.outcome.get("files", -1))
+        r.scanned_items = int(nr.outcome.get("items", -1))
+        r.applicability = str(nr.outcome.get("applicability", ""))
+        r.verdict = "SKIP" if r.applicability else "PASS"
+        return r
+    done = nr.done
+    r.normal_exit = done.returncode
+    out = (done.stdout or "") + "\n" + (done.stderr or "")
     m = SCANNED_RE.search(out)
     if m:
         r.scanned_files = int(m.group(1))
         r.scanned_items = int(m.group(2))
 
     if m is None:
+        nr.forget()
         r.verdict = "FAIL"
         r.detail = "no 'SCANNED:' line (cannot prove it examined anything)"
-        r.failure_output = _failure_output(nr.stdout, nr.stderr)
+        r.failure_output = _failure_output(done.stdout, done.stderr)
         return r
     if r.scanned_files <= 0 and r.scanned_items <= 0:
+        nr.forget()
         r.verdict = "FAIL"
         r.detail = "SCANNED files=0 items=0 (did nothing)"
-        r.failure_output = _failure_output(nr.stdout, nr.stderr)
+        r.failure_output = _failure_output(done.stdout, done.stderr)
         return r
-    if nr.returncode != 0:
+    if done.returncode != 0:
+        nr.forget()
         r.verdict = "FAIL"
-        r.detail = f"normal run exit {nr.returncode} (finding)"
-        r.failure_output = _failure_output(nr.stdout, nr.stderr)
+        r.detail = f"normal run exit {done.returncode} (finding)"
+        r.failure_output = _failure_output(done.stdout, done.stderr)
         return r
 
     # --- applicability: only reachable once all three contracts above HELD ----
@@ -311,16 +441,18 @@ def evaluate_validator(script: Path, cwd: Path) -> Result:
     if am is not None:
         reason = am.group(1).strip()
         if not reason:
+            nr.forget()
             r.verdict = "FAIL"
             r.detail = ("bare 'APPLICABILITY:' line with no reason -- a skip "
                         "nobody can read is a silent one")
-            r.failure_output = _failure_output(nr.stdout, nr.stderr)
+            r.failure_output = _failure_output(done.stdout, done.stderr)
             return r
         r.applicability = reason
         r.verdict = "SKIP"
-        return r
-
-    r.verdict = "PASS"
+    else:
+        r.verdict = "PASS"
+    nr.keep({"files": r.scanned_files, "items": r.scanned_items,
+             "applicability": r.applicability}, r)
     return r
 
 
@@ -342,6 +474,8 @@ def _print_table(results: list[Result]) -> None:
             scanned = "(none)"
         line = (f"  {r.name:<{name_w}}  {r.self_test:<9}  "
                 f"{scanned:<22}  {r.verdict}")
+        if r.reused:
+            line += "  (reused: " + ", ".join(r.reused) + ")"
         _say(line)
         if r.verdict == "SKIP":
             _say(f"  {'':<{name_w}}  -> not applicable to this checkout, so it "
@@ -369,6 +503,18 @@ def summary_lines(results: list[Result]) -> list[str]:
     return lines
 
 
+def reuse_lines(results: list[Result]) -> list[str]:
+    """What --incremental took from the last pass, and what it could not keep."""
+    phases = 2 * len(results)
+    reused = sum(len(r.reused) for r in results)
+    lines = [f"[INFO] incremental: {reused} of {phases} phases reused from the last pass "
+             "(everything they read is unchanged); the rest ran"]
+    lines += [f"[INFO]   ran again: {r.name} ({why})" for r in results for why in r.ran_again]
+    lines += [f"[INFO]   not reusable next time: {r.name} ({r.not_reusable})"
+              for r in results if r.not_reusable]
+    return lines
+
+
 class ConfigError(Exception):
     """The runner was configured wrongly (bad env var, stale timeout entry)."""
 
@@ -393,7 +539,7 @@ def worker_count(job_count: int) -> int:
 
 
 def run_suite(directory: Path, cwd: Path, max_workers: int | None = None,
-              exclude=()) -> tuple[list[Result], bool]:
+              exclude=(), reuse: "Reuse | None" = None) -> tuple[list[Result], bool]:
     """Run every validator in `directory`. Returns (results, nothing_failed).
 
     `nothing_failed` is True when no validator FAILED -- a declared SKIP does not
@@ -415,11 +561,11 @@ def run_suite(directory: Path, cwd: Path, max_workers: int | None = None,
     workers = worker_count(len(scripts)) if max_workers is None else max(
         1, min(max_workers, len(scripts)))
     if workers == 1:
-        results = [evaluate_validator(s, cwd) for s in scripts]
+        results = [evaluate_validator(s, cwd, reuse) for s in scripts]
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             # .map yields in ARGUMENT order, which is what keeps the table stable.
-            results = list(pool.map(lambda s: evaluate_validator(s, cwd), scripts))
+            results = list(pool.map(lambda s: evaluate_validator(s, cwd, reuse), scripts))
     all_passed = bool(results) and all(r.verdict in PASSING_VERDICTS for r in results)
     return results, all_passed
 
@@ -795,7 +941,7 @@ def _run_self_test() -> int:
 
 def run_validators(root: Path, directory: Path, timeout: int = DEFAULT_TIMEOUT,
                    timeouts: dict[str, int] | None = None,
-                   exclude: dict[str, str] | None = None) -> int:
+                   exclude: dict[str, str] | None = None, incremental: bool = False) -> int:
     """Run the suite in `directory` with the repository root as cwd.
 
     `exclude` maps file names to the reason they are not suite validators (for
@@ -833,12 +979,28 @@ def run_validators(root: Path, directory: Path, timeout: int = DEFAULT_TIMEOUT,
         _say(f"  excluded (not run): {name} -- {exclude[name]}")
     if exclude:
         _say()
+    reuse = None
+    if incremental and not all((vcache.TRACER_DIR / name).is_file()
+                               for name in ("sitecustomize.py", "crossweft_trace_sig.py")):
+        _say(f"[WARN] incremental: the tracer {vcache.TRACER_DIR / 'sitecustomize.py'} is "
+             "missing from this install, so nothing can be reused -- every validator runs")
+    elif incremental:
+        reuse = Reuse(root)
+    if reuse is not None and reuse.path is None:
+        _say("[INFO] incremental: not a git work tree, so nothing is kept between runs -- "
+             "every validator runs")
+    if reuse is not None:
+        reuse.prepare(scripts)
     try:
-        results, _ = run_suite(directory, root, exclude=exclude)
+        results, _ = run_suite(directory, root, exclude=exclude, reuse=reuse)
     except ConfigError as exc:
         _say(f"[ERR] {exc}", file=sys.stderr)
         return 2
     _print_table(results)
+    if reuse is not None:
+        reuse.store.save()
+        for line in reuse_lines(results):
+            _say(line)
     failed = [r for r in results if r.verdict not in PASSING_VERDICTS]
     _say()
     if failed:

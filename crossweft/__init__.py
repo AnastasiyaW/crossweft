@@ -6,4 +6,4 @@ algorithms) in agreement across languages, and tells coding agents which other
 side to re-read when they change one.
 """
 
-__version__ = "0.2.8"
+__version__ = "0.2.9"
