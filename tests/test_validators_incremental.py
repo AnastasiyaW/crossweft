@@ -130,9 +130,11 @@ class Incremental(unittest.TestCase):
                        "subprocess.run([sys.executable, '-c', \"open('data.txt').read()\"], check=True)\n"
                        "print('SCANNED: files=1 items=1')\n")
         self.run_suite()
-        self.assertEqual(self.run_suite()[1], [])
+        _, runs, out = self.run_suite()
+        self.assertEqual(runs, [], out)
         self.write("data.txt", "b\n")
-        self.assertEqual(self.run_suite()[1], ["validate_child:normal"])
+        _, runs, out = self.run_suite()
+        self.assertEqual(runs, ["validate_child:normal"], out)
 
     def test_an_untraceable_child_is_never_reused(self) -> None:
         # -I ignores PYTHONPATH, so the child never reports what it read
