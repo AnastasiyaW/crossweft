@@ -124,6 +124,33 @@ class Incremental(unittest.TestCase):
         finally:
             os.environ.pop("CW_MODE", None)
 
+    @unittest.skipUnless(hasattr(os, "posix_spawn"), "os.posix_spawn is POSIX-only")
+    def test_a_child_subprocess_starts_with_posix_spawn_is_traced(self) -> None:
+        # subprocess picks posix_spawn by itself on some Linux/Python versions (seen on
+        # GitHub's ubuntu runner with 3.13); forced here so every POSIX run covers it
+        self.write("data.txt", "a\n")
+        self.validator("pspawn", "import subprocess\n"
+                       "subprocess._USE_POSIX_SPAWN = True\n"
+                       "subprocess.run([sys.executable, '-c', \"open('data.txt').read()\"],"
+                       " check=True, close_fds=False)\n"
+                       "print('SCANNED: files=1 items=1')\n")
+        self.run_suite()
+        _, runs, out = self.run_suite()
+        self.assertEqual(runs, [], out)
+        self.write("data.txt", "b\n")
+        _, runs, out = self.run_suite()
+        self.assertEqual(runs, ["validate_pspawn:normal"], out)
+
+    @unittest.skipUnless(hasattr(os, "posix_spawn"), "os.posix_spawn is POSIX-only")
+    def test_a_bare_posix_spawn_is_untraceable(self) -> None:
+        self.validator("bare", "pid = os.posix_spawn(sys.executable, [sys.executable, '-c', 'pass'],"
+                       " dict(os.environ))\n"
+                       "os.waitpid(pid, 0)\n"
+                       "print('SCANNED: files=1 items=1')\n")
+        _, _, out = self.run_suite()
+        line = [l for l in out.splitlines() if "not reusable next time: validate_bare.py" in l]
+        self.assertTrue(line and "os.posix_spawn" in line[0], out)
+
     def test_a_python_child_is_traced(self) -> None:
         self.write("data.txt", "a\n")
         self.validator("child", "import subprocess\n"

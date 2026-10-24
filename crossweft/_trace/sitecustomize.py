@@ -41,6 +41,9 @@ def _install(trace_dir: str) -> None:
               "trees": set(), "lists": {}, "stats": {}, "env": {}, "env_all": False,
               "spawns": [], "untraceable": set()}
     busy = [False]
+    # subprocess on Linux may start the child with os.posix_spawn right after its own
+    # subprocess.Popen event: that is the same, already recorded spawn
+    popen_argv = {}
 
     def norm(path):
         if isinstance(path, int):
@@ -201,6 +204,14 @@ def _install(trace_dir: str) -> None:
                     "where": os.path.realpath(where),
                     "gitdir": git_marker(os.path.realpath(where)),
                     "env": git_env, "env_explicit": env is not None})
+                import threading
+                popen_argv[threading.get_ident()] = record["spawns"][-1]["argv"]
+            elif event == "os.posix_spawn" and args and len(args) > 1:
+                import threading
+                expected = popen_argv.pop(threading.get_ident(), None)
+                given = [os.fsdecode(a) if isinstance(a, bytes) else str(a) for a in (args[1] or [])]
+                if expected is None or given != expected:
+                    record["untraceable"].add(event)
             elif event == "_winapi.CreateProcess":
                 # every Popen on Windows also lands here; the runner compares the counts
                 record["createprocess"] = record.get("createprocess", 0) + 1
