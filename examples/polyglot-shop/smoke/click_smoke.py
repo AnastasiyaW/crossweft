@@ -197,7 +197,7 @@ def self_test() -> int:
             print("[ERR] self-test fixture drifted: app.js no longer has the placeOrder fetch")
             return 2
         planted = 'throw new Error("planted"); ' + original
-        app.write_text(text.replace(original, planted, 1), encoding="utf-8", newline="\n")
+        app.write_bytes(text.replace(original, planted, 1).encode("utf-8"))  # newline= is 3.10+
         print("== intact copy (must pass)")
         good = run(intact)
         print("== a handler that throws before its request (must fail)")

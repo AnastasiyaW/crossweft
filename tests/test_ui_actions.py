@@ -41,7 +41,7 @@ class ShopCopy(unittest.TestCase):
         path = self.root / rel
         text = path.read_text(encoding="utf-8")
         self.assertIn(old, text, f"fixture drifted: {old!r} not in {rel}")
-        path.write_text(text.replace(old, new, 1), encoding="utf-8", newline="\n")
+        path.write_bytes(text.replace(old, new, 1).encode("utf-8"))  # write_text(newline=) is 3.10+
 
     def keys(self) -> set[str]:
         code, output = run(["--root", str(self.root), "check", "--json"])
@@ -99,7 +99,7 @@ class UiActionMisconfigurations(ShopCopy):
         return path, json.loads(path.read_text(encoding="utf-8"))
 
     def save(self, path: Path, model: dict) -> None:
-        path.write_text(json.dumps(model, indent=2), encoding="utf-8", newline="\n")
+        path.write_bytes(json.dumps(model, indent=2).encode("utf-8"))
 
     def test_misspelt_regex_is_loud_even_when_prefix_regex_matches(self) -> None:
         path, model = self.entry()
