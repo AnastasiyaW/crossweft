@@ -96,7 +96,7 @@ fails again.
 ## Install
 
 ```bash
-python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.9"
+python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.10"
 ```
 
 Requires Python 3.9+ and Git. This release is distributed from GitHub. The
@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: AnastasiyaW/crossweft@<release commit>  # v0.2.9
+      - uses: AnastasiyaW/crossweft@<release commit>  # v0.2.10
 ```
 
 Pin the release commit shown on the [release page](https://github.com/AnastasiyaW/crossweft/releases/latest):
@@ -192,7 +192,7 @@ release tags here are immutable, but a commit cannot move at all.
 ## Five minutes on the demo
 
 ```bash
-git clone --branch v0.2.9 --depth 1 https://github.com/AnastasiyaW/crossweft
+git clone --branch v0.2.10 --depth 1 https://github.com/AnastasiyaW/crossweft
 cd crossweft
 python -m pip install -e .
 cd examples/polyglot-shop && crossweft check
@@ -208,9 +208,15 @@ The demo is a Go API, a TypeScript client, a Python worker and an
 | add a status to the Python worker only | `set:worker-statuses` |
 | read a new env var in the worker, not in `.env.example` | `set:env-worker-vars` |
 | call `/v1/refunds` from the client | `route:client-unexplained` |
+| rename a button's `data-action` in `web/public/index.html` only | `ui:admin-buttons:dead` (and `:orphan` for the old name) |
+| drop a handler from the `ACTIONS` table in `web/public/app.js` | `ui:admin-buttons:dead` |
 | change the rounding in `server/pricing.go` | `pair:price-rounding` -- until someone re-reads the TypeScript twin and runs `crossweft attest` |
 
-Every one of these is a test in [`tests/test_crossweft.py`](tests/test_crossweft.py).
+Every one of these is a test in [`tests/test_crossweft.py`](tests/test_crossweft.py)
+and [`tests/test_ui_actions.py`](tests/test_ui_actions.py). `crossweft actions`
+prints the chain of every button, and
+[`smoke/click_smoke.py`](examples/polyglot-shop/smoke/click_smoke.py) presses each
+one in Chromium and waits for its request.
 `crossweft render` turns the map into Markdown pages with Mermaid diagrams and
 an interactive [`viewer.html`](examples/polyglot-shop/seams/viewer.html).
 
@@ -312,7 +318,7 @@ missing. Details: [docs/agents.md](docs/agents.md).
 
 Then put it where the rest of the work happens:
 
-- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.9` (annotates the
+- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.10` (annotates the
   diff; pin the commit like any action, a tag can be moved), the
   `crossweft-check` pre-commit hook, or `crossweft check --format github|json|sarif`
   (SARIF 2.1.0 for GitHub code scanning; recorded findings arrive as suppressed
@@ -377,7 +383,7 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
 
 ## Status
 
-`0.2.9`, alpha. The engine grew inside a commercial product that spans several
+`0.2.10`, alpha. The engine grew inside a commercial product that spans several
 languages and processes, where one-sided changes kept reaching installs; this
 is its extraction. Built by [HappyIn](https://happyin.ai).
 

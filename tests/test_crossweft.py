@@ -125,7 +125,8 @@ class DemoTest(unittest.TestCase):
         self.edit("web/src/api.ts", '"2026-09-01"', '"2026-10-01"')
         code, output = self.check("--format", "github")
         self.assertEqual(code, 1)
-        self.assertRegex(output, r"::error file=(web/src/api\.ts|server/main\.go),line=\d+")
+        self.assertRegex(output, r"::error file=(web/src/api\.ts|web/public/app\.js|server/main\.go),"
+                                 r"line=\d+")
 
     def test_sarif_locates_the_drift_and_keeps_the_exit_code(self) -> None:
         code, output = self.check("--format", "sarif")
@@ -142,7 +143,7 @@ class DemoTest(unittest.TestCase):
         self.assertTrue(rows, output)
         self.assertEqual(rows[0]["level"], "error")
         uri = rows[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
-        self.assertIn(uri, ("web/src/api.ts", "server/main.go"))
+        self.assertIn(uri, ("web/src/api.ts", "web/public/app.js", "server/main.go"))
         self.assertTrue(rows[0]["partialFingerprints"]["crossweftKey/v1"].startswith(
             "join:api-version:"))
         for rule in sarif["runs"][0]["tool"]["driver"]["rules"]:
@@ -482,7 +483,8 @@ class DemoTest(unittest.TestCase):
         self.assertIn("2026-09-01", found)
         join = found["2026-09-01"]["join"]
         self.assertIsNotNone(join, found["2026-09-01"])
-        self.assertEqual({p["path"] for p in join["points"]}, {"web/src/api.ts", "server/main.go"})
+        self.assertEqual({p["path"] for p in join["points"]},
+                         {"web/src/api.ts", "web/public/app.js", "server/main.go"})
         self.assertIsNotNone(report["env"])
 
     def test_discover_suggested_joins_pass_check(self) -> None:

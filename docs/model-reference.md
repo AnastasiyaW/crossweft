@@ -201,6 +201,79 @@ the lock file. Any later change to any region fails the check until someone
 re-reads the others and attests again. `crossweft attest --all` attests every
 changed pair; `--prune` drops lock entries for removed pairs.
 
+### `ui_actions` -- every control reaches its handler
+
+A button, a menu command or a keyboard callback names its action by a string
+written by hand; the code that runs it is found through hand-written tables. A
+`ui_actions` entry follows each control through those tables (its hops) to the
+end, and optionally to a declared route.
+
+```json
+{"id": "admin-buttons", "name": "Admin page buttons reach an API route",
+ "link": "web-orders", "routes": true, "orphans": true,
+ "controls": {"label": "buttons", "paths": ["web/public/index.html"],
+              "regex": "data-action=\"([a-z-]+)\""},
+ "hops": [
+   {"label": "ACTIONS table", "paths": ["web/public/app.js"],
+    "within": "const ACTIONS = \\{([^}]*)\\}", "regex": "\"([a-z-]+)\":\\s*(\\w+)"},
+   {"label": "route the handler fetches", "paths": ["web/public/app.js"],
+    "regex": "async function (\\w+)\\(\\)\\s*\\{[^}]*?fetch\\(\\s*[\"`]([^\"`]+)"}]}
+```
+
+`controls` and each hop read files like a set side (`paths`, optional `within`
+and `exclude`):
+
+- `regex` takes exact values. On `controls` it has one group. On a hop, one
+  group is a set of keys (the value goes on unchanged); two groups are a map:
+  the key, and the value the next hop looks up.
+- `prefix_regex` (one group) takes static prefixes. On `controls` they are
+  dynamic controls (`` data-action=`export:${format}` `` gives `export:`). On
+  a hop they are prefix rules (`startsWith("export:")`): a rule handles
+  every value it covers and ends the chain there.
+
+An exact value is taken by a hop key first, then by the longest covering
+prefix rule. A dynamic control is resolved only by a prefix rule that covers its
+whole static prefix: exact keys cannot prove that every value it builds is
+handled. A dynamic control with no static part at all (`` `${kind}` ``) is
+dead: nothing can prove its values handled -- give it a prefix, or `allow` it.
+On a two-group hop, a key whose second group did not match is dead too (there
+is no value to follow); a key bound more than once is followed through its last
+binding. With `"routes": true` the value leaving the last hop must be a route a
+current link declares: the same path (any method, the query string dropped) or a
+matching glob. A template's `${...}` is a path parameter, so
+`` `/v1/orders/${id}` `` matches `/v1/orders/{id}` and `` `/v1/${kind}` `` matches
+only a declared `/v1/{...}`. Unlike a client literal, a value ending in `/` is one
+request, not every route below it: `"/v1/" + kind` gives `/v1/`, which is
+`unrouted` unless `/v1/` itself is declared. The route checks keep that route served. A chain that ends at a prefix
+rule has no value to check, so with `routes` it is `unrouted` unless allowed.
+
+Problems: `ui:<id>:dead:<control>` (no hop key or rule takes it; a dynamic
+control is written `<prefix>*`), `ui:<id>:unrouted:<control>`,
+`ui:<id>:orphan:<key>` (with `"orphans": true`: a first-hop key or rule no
+control sends any more), `ui:<id>:conflict:<hop>:<key>` (a key bound twice to
+different values -- the later binding silently wins), `ui:<id>:stale-allow:<item>`.
+`allow`: `[{"item", "reason"}]` excuses one control or orphan (its trace shows
+`allowed`). Each of a side's `regex` and `prefix_regex` that extracts nothing
+fails on its own as `anchor:ui:<id>:items:<label>:<regex|prefix_regex>`, so a
+misspelt pattern cannot hide behind the other one. Labels must be unique within
+an entry, across `controls` and every hop: the problem keys carry them. A
+pattern reads text, not code, so a commented-out table line still counts; use
+`within` or `exclude` to keep comments out. For the same reason a hop regex that
+stops at the closing quote reads `"/v1/orders" + "-x"` as `/v1/orders`: when a
+handler may concatenate, end the pattern with the quote and the next `,` or `)`.
+An exact first-hop key under a
+dynamic control's prefix counts as reached for `orphans` (the control may build
+that very value), although only a rule can prove the control handled.
+
+`crossweft actions [--json] [<id>]` prints each control's chain -- which hop
+took it, and where -- and exits `0` when `check` would raise no problem for the
+selected entries, `1` when it would, `2` when nothing could be traced. A click smoke test can read the
+JSON to know what to press and which request to expect: see
+[`examples/polyglot-shop/smoke/click_smoke.py`](../examples/polyglot-shop/smoke/click_smoke.py).
+The static check proves the wiring in the source; only a run proves the handler
+does not throw, the button is not covered, and the page builds no button the map
+does not know.
+
 ## Anchors
 
 `{"path": "server/main.go", "find": "type Order struct"}` or

@@ -73,7 +73,7 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from . import harness, hazards, i18n, joints
+from . import harness, hazards, i18n, joints, ui_actions
 from .scope import scope_hit
 
 SCHEMA_ID = "crossweft.map.v1"
@@ -83,7 +83,8 @@ PACKAGED_VIEWER = Path(__file__).with_name("viewer.template.html")
 PAIR_BEGIN = "crossweft:begin"
 PAIR_END = "crossweft:end"
 
-ENTITY_KEYS = ("blocks", "links", "flows", "data", "joins", "sets", "pairs", "findings")
+ENTITY_KEYS = ("blocks", "links", "flows", "data", "joins", "sets", "pairs", "ui_actions",
+               "findings")
 TOP_LEVEL_KEYS = set(ENTITY_KEYS) | {"meta", "$comment"}
 # A joint plugin's kind is a model key and a problem-key prefix: it may not be
 # one of crossweft's own (crossweft/joints.py).
@@ -91,7 +92,7 @@ RESERVED_JOINT_KINDS = (TOP_LEVEL_KEYS | {key.rstrip("s") for key in ENTITY_KEYS
                         | {"anchor", "anchors", "route", "routes", "status", "provenance", "seam",
                            "seams", "evidence", "coverage", "agents", "escape", "path_case",
                            "joints", "requirements", "freshness", "hazard",
-                           "hazards"})
+                           "hazards", "ui"})
 
 KINDS = {"actor", "executable", "service", "component", "library", "store", "external",
          "artifact", "tool", "contract", "site", "host", "ci", "group"}
@@ -1433,6 +1434,11 @@ def _fields(kind: str) -> dict[str, tuple[bool, object]]:
             "id": (True, "id"), "name": (True, "str"), "regions": (True, "regions"),
             "link": (False, "link"), "notes": (False, "str"),
         },
+        "ui_actions": {
+            "id": (True, "id"), "name": (True, "str"), "controls": (True, "ui-side"),
+            "hops": (True, "ui-hops"), "link": (False, "link"), "routes": (False, "bool"),
+            "orphans": (False, "bool"), "allow": (False, "ui-allow"), "notes": (False, "str"),
+        },
         "findings": {
             "id": (True, "finding-id"), "title": (True, "str"),
             "severity": (True, ("enum", set(SEVERITIES))),
@@ -1691,6 +1697,25 @@ def _check_value(model: Model, value: object, vtype: object, label: str) -> list
             if "transform" in value:
                 if not _is_str_list(value["transform"]) or set(value["transform"]) - TRANSFORMS:
                     errors.append(f"{label}.transform: allowed {sorted(TRANSFORMS)}")
+    elif vtype == "ui-side":
+        errors += _ui_side_errors(model, value, label, controls=True)
+    elif vtype == "ui-hops":
+        if not isinstance(value, list) or not value:
+            errors.append(f"{label}: must be a non-empty list of hops")
+        else:
+            for index, hop in enumerate(value):
+                errors += _ui_side_errors(model, hop, f"{label}[{index}]", controls=False)
+    elif vtype == "ui-allow":
+        if not isinstance(value, list):
+            errors.append(f"{label}: must be a list")
+        else:
+            for index, entry in enumerate(value):
+                sub = f"{label}[{index}]"
+                if not isinstance(entry, dict) or set(entry) - {"item", "reason"}:
+                    errors.append(f"{sub}: must be {{item, reason}}")
+                    continue
+                errors += _check_value(model, entry.get("item"), "str", f"{sub}.item")
+                errors += _check_value(model, entry.get("reason"), "str", f"{sub}.reason")
     elif vtype == "allow":
         if not isinstance(value, list):
             errors.append(f"{label}: must be a list")
@@ -1753,6 +1778,35 @@ def _check_regex_one_group(value: object, label: str) -> list[str]:
     return _check_regex_groups(value, label, minimum=1, maximum=1)
 
 
+def _ui_side_errors(model: Model, value: object, label: str, controls: bool) -> list[str]:
+    """A ui_action's controls or one of its hops, read like a set side. `regex`
+    takes exact values (a hop may add a second group: the value the key leads
+    to), `prefix_regex` takes static prefixes (dynamic controls, or a hop's
+    startswith rules)."""
+    if not isinstance(value, dict):
+        return [f"{label}: must be an object"]
+    unknown = set(value) - UI_SIDE_KEYS
+    errors = [f"{label}: unknown key(s) {sorted(unknown)}"] if unknown else []
+    errors += _check_value(model, value.get("label"), "str", f"{label}.label")
+    errors += _check_value(model, value.get("paths"), "paths", f"{label}.paths")
+    if "regex" not in value and "prefix_regex" not in value:
+        errors.append(f"{label}: needs 'regex' (exact values) and/or 'prefix_regex' (prefixes)")
+    if "regex" in value:
+        problems = _check_regex_groups(value["regex"], f"{label}.regex", minimum=1,
+                                       maximum=1 if controls else 2)
+        if problems and not controls and "capture group" in problems[0]:
+            problems = [f"{label}.regex: a hop regex has 1 group (a set of keys) or 2 (key and "
+                        f"the value it leads to), not {re.compile(value['regex']).groups}"]
+        errors += problems
+    if "prefix_regex" in value:
+        errors += _check_regex_one_group(value["prefix_regex"], f"{label}.prefix_regex")
+    if "within" in value:
+        errors += _check_regex_one_group(value["within"], f"{label}.within")
+    if "exclude" in value:
+        errors += _check_value(model, value["exclude"], "paths", f"{label}.exclude")
+    return errors
+
+
 def _ref_exists(model: Model, ref: object) -> bool:
     if not isinstance(ref, str):
         return False
@@ -1765,6 +1819,7 @@ def _ref_exists(model: Model, ref: object) -> bool:
     return ident in model.by_id[table]
 
 
+UI_SIDE_KEYS = {"label", "paths", "regex", "prefix_regex", "within", "exclude"}
 META_KEYS = {"$comment", "schema", "title", "verified_on", "verified_against", "planes", "lanes",
              "route_scan", "coverage", "notes", "joint_kinds"}
 ROUTE_SCAN_KEYS = {"routers", "router_search", "ignore_routers", "client_globs", "client_exclude",
@@ -1991,6 +2046,13 @@ def _validate_schema(model: Model) -> list[str]:
             errors.append(f"{label}: closed finding needs 'closed_by' (commit or evidence)")
         if not finding.get("detected_by") and not finding.get("evidence"):
             errors.append(f"{label}: needs detected_by (check keys or 'manual') or evidence")
+    for entry in model.entities["ui_actions"]:
+        sides = [entry.get("controls")] + list(entry.get("hops") or [])
+        names = [side.get("label") for side in sides if isinstance(side, dict)]
+        for name in sorted({n for n in names if isinstance(n, str) and names.count(n) > 1}):
+            errors.append(f"{model.where(entry)}: ui_action {entry.get('id')}: label '{name}' "
+                          "names two sides -- problem keys carry the label, so the controls "
+                          "and each hop need their own")
     for join in model.entities["joins"]:
         points = join.get("points")
         for index, point in enumerate(points if isinstance(points, list) else []):
@@ -2210,6 +2272,14 @@ class RouteIndex:
         return (lit in self.exact or (lit.endswith("/") and bool(self.below(lit)))
                 or any(fnmatch.fnmatchcase(lit, glob) for _, glob, _ in self.globs))
 
+    def declares(self, path: str) -> bool:
+        """A request path is declared by a route with that path (any method) or a
+        matching glob. Unlike `explains`, a path ending in '/' is one request, not
+        every route below it: `fetch("/v1/" + kind)` must not pass as `/v1/`."""
+        norm = Checker._norm_route_path(path)
+        return (norm in self.exact
+                or any(fnmatch.fnmatchcase(norm, glob) for _, glob, _ in self.globs))
+
     def serves(self, method: str, path: str) -> bool:
         """On an index of REGISTERED routes: a declared METHOD path is served
         when it is registered with that method, or either side is ANY; a
@@ -2251,6 +2321,8 @@ class Checker:
         self.skipped_keys: set[str] = set()
         self.skipped_prefixes: list[str] = []
         self.unverified: list[str] = []
+        self.route_index: RouteIndex | None = None
+        self.ui_traces: dict[str, list[ui_actions.Trace]] = {}
 
     # ------------------------------------------------------------- change scope
     def in_scope(self, targets: list[str]) -> bool:
@@ -2681,6 +2753,120 @@ class Checker:
                              f"{owner}: allow entry ({side}) '{item}' no longer needed -- remove it",
                              fatal=True)
 
+    # ------------------------------------------------------------- ui actions
+    def _ui_extract(self, side: dict, owner: str, controls: bool = False
+                    ) -> tuple[dict[str, list[tuple[str | None, ui_actions.Place]]],
+                               dict[str, ui_actions.Place]]:
+        """Exact values (each with the value its second group leads to, if any)
+        and static prefixes of one side, each with where it was seen. An empty
+        prefix is kept on controls (a fully computed value, which nothing can
+        prove handled) and dropped on hops (a rule that would cover everything)."""
+        keys: dict[str, list[tuple[str | None, ui_actions.Place]]] = {}
+        prefixes: dict[str, ui_actions.Place] = {}
+        found = {"regex": 0, "prefix_regex": 0}
+        files = self._set_files(side, owner, "paths")
+        patterns = [(name, re.compile(side[name], re.MULTILINE))
+                    for name in ("regex", "prefix_regex") if name in side]
+        for rel in files:
+            text = self.text(rel) or ""
+            regions = [(0, text)]
+            if "within" in side:
+                regions = [(m.start(1), m.group(1))
+                           for m in re.finditer(side["within"], text, re.MULTILINE)
+                           if m.group(1) is not None]
+                if not regions:
+                    self.add(f"anchor:{owner}:within:{rel}", "anchors",
+                             f"{owner}: 'within' regex not matched in {rel}: {side['within']!r}",
+                             fatal=True, path=rel)
+            for offset, region in regions:
+                for name, pattern in patterns:
+                    for match in pattern.finditer(region):
+                        item = match.group(1)
+                        if item is None or (not item and not (controls and name == "prefix_regex")):
+                            continue
+                        found[name] += 1
+                        place = ui_actions.Place(rel, self.line_at(rel, offset + match.start()))
+                        if name == "prefix_regex":
+                            prefixes.setdefault(item, place)
+                        else:
+                            value = match.group(2) if pattern.groups >= 2 else None
+                            keys.setdefault(item, []).append((value, place))
+        for name, _ in patterns:
+            # each pattern on its own: a misspelt regex must not hide behind a
+            # prefix_regex that still matches
+            if files and not found[name]:
+                self.add(f"anchor:{owner}:items:{side['label']}:{name}", "anchors",
+                         f"{owner}: '{side['label']}' {name} extracted nothing "
+                         "(regex/paths wrong?)", fatal=True, path=files[0])
+        return keys, prefixes
+
+    def check_ui_actions(self) -> None:
+        """Every control reaches its handler through each hop (ui_actions.py)."""
+        entries = self.model.entities["ui_actions"]
+        if not entries:
+            return
+        index = self.route_index or RouteIndex(
+            [d for d in self.declared_routes() if d[2]["status"] == "current"])
+        for entry in entries:
+            owner = f"ui:{entry['id']}"
+            sides = [entry["controls"], *entry["hops"]]
+            targets = [t for side in sides for t in side.get("paths", [])]
+            if not self.guard(targets, prefixes=(f"{owner}:", f"anchor:{owner}:")):
+                continue
+            exact, dynamic = self._ui_extract(entry["controls"], owner, controls=True)
+            controls = {value: places[0][1] for value, places in exact.items()}
+            hops = []
+            for side in entry["hops"]:
+                keys, rules = self._ui_extract(side, owner)
+                maps = "regex" in side and re.compile(side["regex"]).groups >= 2
+                hop = ui_actions.Hop(side["label"], keys, rules, maps)
+                hops.append(hop)
+                for key, bound in ui_actions.conflicts(hop):
+                    shown = ", ".join(f"{value!r} ({place.rel}:{place.line})"
+                                      for value, place in bound[:3])
+                    self.add(f"{owner}:conflict:{side['label']}:{key}", "ui",
+                             f"{owner}: {side['label']} binds {key!r} more than once ({shown}) "
+                             "-- the later binding silently wins", path=bound[-1][1].rel,
+                             line=bound[-1][1].line)
+            if not controls and not dynamic:
+                continue   # reported by _ui_extract: a chain with no control proves nothing
+            # a template literal's `${...}` is a path parameter: `/v1/orders/${id}`
+            # must match `/v1/orders/{id}`, and `/v1/${kind}` matches no route at all;
+            # a UI request is one path, so the client-literal "below '/'" rule does not apply
+            explains = index.declares if entry.get("routes") else None
+            traces = ui_actions.resolve(controls, dynamic, hops, explains,
+                                        as_route=lambda value: value.split("?", 1)[0]
+                                        .replace("${", "{"))
+            self.ui_traces[entry["id"]] = traces
+            self.items_checked += len(traces) + sum(len(h.keys) + len(h.rules) for h in hops)
+            allowed = {a["item"] for a in entry.get("allow", [])}
+            used: set[str] = set()
+            for trace in traces:
+                if trace.status == "ok":
+                    continue
+                item = trace.control + ("*" if trace.dynamic else "")
+                if item in allowed:
+                    used.add(item)
+                    trace.status = "allowed"
+                    continue
+                self.add(f"{owner}:{trace.status}:{item}", "ui",
+                         f"{owner}: control {item!r} ({trace.place.rel}:{trace.place.line}): "
+                         f"{trace.detail}", path=trace.place.rel, line=trace.place.line)
+            if entry.get("orphans") and hops:
+                first = hops[0]
+                for key in ui_actions.orphans(first, controls, dynamic):
+                    if key in allowed:
+                        used.add(key)
+                        continue
+                    place = first.keys[key][0][1] if key in first.keys else first.rules[key]
+                    self.add(f"{owner}:orphan:{key}", "ui",
+                             f"{owner}: {first.label} handles {key!r} but no control in "
+                             f"'{entry['controls']['label']}' sends it any more -- remove the "
+                             "handler or restore the control", path=place.rel, line=place.line)
+            for item in sorted(allowed - used):
+                self.add(f"{owner}:stale-allow:{item}", "ui",
+                         f"{owner}: allow entry '{item}' no longer needed -- remove it", fatal=True)
+
     # ------------------------------------------------------------------ pairs
     def pair_state(self, pair: dict) -> tuple[dict[str, str], dict[str, int], bool]:
         """Fingerprints of every region of a pair: ({path: sha256}, {path: first
@@ -3012,6 +3198,7 @@ class Checker:
         gone = [d for d in declared if d[2]["status"] == "legacy" and d[2].get("gone")]
         elsewhere = [d for d in declared if d[2]["status"] != "current" and not d[2].get("gone")]
         mapped = RouteIndex(current)
+        self.route_index = mapped
         retired = RouteIndex(gone)
         # Two guards, because the two halves read different files. Under
         # `check --changed` the model is unchanged -- a changed model file, and
@@ -3283,6 +3470,9 @@ class Checker:
             return {point["path"] for point in entry.get("points", [])}
         if kind == "pairs":
             return {region["path"] for region in entry.get("regions", [])}
+        if kind == "ui_actions":
+            return {f for side in [entry["controls"], *entry["hops"]]
+                    for f in self.expand(side.get("paths", []), side.get("exclude"))}
         files: set[str] = set()
         for key in ("left", "right"):
             side = entry.get(key, {})
@@ -3300,7 +3490,8 @@ class Checker:
     def check_seams(self) -> None:
         m = self.model
         guards: dict[str, list[tuple[str, set[str]]]] = {}
-        for kind, prefix in (("joins", "join"), ("sets", "set"), ("pairs", "pair")):
+        for kind, prefix in (("joins", "join"), ("sets", "set"), ("pairs", "pair"),
+                             ("ui_actions", "ui")):
             for entry in m.entities[kind]:
                 if entry.get("link"):
                     guards.setdefault(entry["link"], []).append(
@@ -3453,6 +3644,7 @@ class Checker:
         self.check_sets()
         self.check_pairs()
         self.check_routes()
+        self.check_ui_actions()
         self.check_status()
         self.check_provenance()
         self.check_seams()
@@ -3637,7 +3829,7 @@ def evaluate(cfg: Config, changed: str | None = None,
 
 
 CATEGORIES = ("anchors", "joins", "sets", "pairs", "routes", "status", "provenance", "seams",
-              "evidence", "coverage", "agents", "joints", "hazards")
+              "evidence", "coverage", "agents", "joints", "hazards", "ui")
 
 
 def _gh_escape(text: str, property_value: bool = False) -> str:
@@ -3665,6 +3857,7 @@ SARIF_RULES = {
     "agents": "The repository's agent harness is missing or out of date.",
     "joints": "A repository-specific joint plugin reports a disagreement or failed.",
     "hazards": "Script text that silently breaks what another program reads (crossweft/hazards.py).",
+    "ui": "A control does not reach its handler, or a handler no control sends to.",
     "stale-finding": "A recorded finding no longer reproduces and must be closed.",
     "render": "Generated documentation is out of date with the model.",
 }
@@ -4797,6 +4990,74 @@ def run_show(cfg: Config, ident: str) -> int:
     return 0
 
 
+def _trace_row(trace: ui_actions.Trace) -> dict:
+    return {"control": trace.control, "dynamic": trace.dynamic, "path": trace.place.rel,
+            "line": trace.place.line, "status": trace.status, "detail": trace.detail,
+            "steps": [{"hop": step.hop, "key": step.key, "kind": step.kind,
+                       "path": step.place.rel if step.place else None,
+                       "line": step.place.line if step.place else None, "value": step.value}
+                      for step in trace.steps]}
+
+
+def run_actions(cfg: Config, ident: str | None = None, as_json: bool = False) -> int:
+    """Print the chain of every control: which hop takes it, and where. 0 when
+    `check` would raise no problem for the selected entries, 1 when it would, 2
+    when nothing could be traced (an invalid model, or no ui_actions)."""
+    try:
+        model = load_model(cfg)
+    except ModelError as exc:
+        out(f"[ERR] {exc}")
+        return 2
+    errors = validate_schema(model)
+    if errors:
+        for error in errors[:20]:
+            out(f"[ERR] {error}")
+        return 2
+    wanted = ident.split(":", 1)[1] if ident and ident.startswith("ui:") else ident
+    entries = [e for e in model.entities["ui_actions"] if wanted in (None, e["id"])]
+    if not entries:
+        out(f"[ERR] no ui_actions entry '{wanted}'" if wanted else
+            "[ERR] the model declares no ui_actions -- nothing to trace")
+        return 2
+    checker = Checker(model)
+    checker.check_routes()
+    checker.check_ui_actions()
+    rows = []
+    for entry in entries:
+        traces = checker.ui_traces.get(entry["id"])
+        rows.append({"id": entry["id"], "name": entry["name"], "routes": bool(entry.get("routes")),
+                     "traced": traces is not None,
+                     "controls": [_trace_row(t) for t in traces or []]})
+    # the same problems `check` raises for these entries, so the two never disagree
+    owners = tuple(f"{prefix}ui:{e['id']}:" for e in entries for prefix in ("", "anchor:"))
+    problems = [p for p in checker.problems if p.key.startswith(owners)]
+    ok = all(row["traced"] for row in rows) and not problems
+    if as_json:
+        print(json.dumps({"ok": ok, "ui_actions": rows,
+                          "problems": [{"key": p.key, "message": p.message} for p in problems]},
+                         indent=2))
+    else:
+        for row in rows:
+            out(f"ui:{row['id']}  {row['name']}")
+            if not row["traced"]:
+                out("  [ERR] not traced: its controls extracted nothing")
+            for control in row["controls"]:
+                name = control["control"] + ("*" if control["dynamic"] else "")
+                out(f"  [{control['status']}] {name}  ({control['path']}:{control['line']})")
+                for step in control["steps"]:
+                    where = f"  ({step['path']}:{step['line']})" if step["path"] else ""
+                    lead = f" -> {step['value']}" if step["value"] else ""
+                    kind = {"rule": "prefix rule ", "route": "declared route "}.get(step["kind"], "")
+                    out(f"      {step['hop']}: {kind}{step['key']}{lead}{where}")
+                if control["detail"]:
+                    out(f"      !! {control['detail']}")
+        for problem in problems:
+            if not problem.key.startswith(tuple(f"ui:{e['id']}:{kind}:" for e in entries
+                                                for kind in ("dead", "unrouted"))):
+                out(f"[ERR] {problem.message}")   # dead/unrouted are shown under their control
+    return 0 if ok else (2 if not all(row["traced"] for row in rows) else 1)
+
+
 # --------------------------------------------------------------------------- #
 # impact -- which seams a change touches
 # --------------------------------------------------------------------------- #
@@ -4956,7 +5217,8 @@ def build_impact(model: Model, changed: list[str]) -> dict:
 
     guards_of: dict[str, list[str]] = {}
     guard_rows = []
-    for kind, prefix in (("joins", "join"), ("sets", "set"), ("pairs", "pair")):
+    for kind, prefix in (("joins", "join"), ("sets", "set"), ("pairs", "pair"),
+                         ("ui_actions", "ui")):
         for entry in m.entities[kind]:
             ref = f"{prefix}:{entry['id']}"
             if entry.get("link"):
@@ -4965,13 +5227,16 @@ def build_impact(model: Model, changed: list[str]) -> dict:
                 targets = [point["path"] for point in entry["points"]]
             elif kind == "pairs":
                 targets = [region["path"] for region in entry["regions"]]
+            elif kind == "ui_actions":
+                targets = [t for side in [entry["controls"], *entry["hops"]]
+                           for t in side["paths"]]
             else:
                 targets = [t for key in ("left", "right")
                            for t in (entry[key].get("files") or entry[key].get("paths") or [])]
             touched = hits(targets)
             if touched:
                 row = {"ref": ref, "link": entry.get("link"), "files": touched}
-                if kind in ("joins", "pairs"):
+                if kind in ("joins", "pairs", "ui_actions"):
                     # the other files this guard reads: the ones to re-read
                     row["other"] = sorted({t for t in targets
                                            if not any(_path_hit(c, t) for c in changed)})
@@ -5772,6 +6037,7 @@ def self_test() -> int:
         # rule set end to end -- each unsafe form red under its own key, the safe
         # forms green, and a glob that names no file red (never "scanned nothing")
         failures += hazards.self_test()
+        failures += ui_actions.self_test()
         hazard_config = {**_SELF_TEST_CONFIG, "hazards": {"include": ["build/*"]}}
         unsafe = {"build/run.cmd": 'echo step=%RC%>>"status.txt"\n',
                   "build/read.ps1": "$code = [int]$parts[1]\n",
@@ -5915,6 +6181,7 @@ def run_attest(cfg: Config, ids: list[str], reason: str | None, all_pending: boo
 
 
 BASELINE_KINDS = {"joins": "contract-mismatch", "sets": "contract-mismatch",
+                  "ui": "contract-mismatch",
                   "pairs": "hand-duplicated", "routes": "unmapped-route"}
 
 

@@ -161,6 +161,14 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("id", help="an id, bare or as kind:id the way check, impact and hooks "
                                  "print it (a problem key works too)")
 
+    actions = sub.add_parser("actions", help="trace every UI control to its handler",
+        description="Print, for each control of the model's ui_actions, every hop that takes "
+                    "it (a dispatch table, a registry, a handler's route) and where. A click "
+                    "smoke test can read --json to know what to press and what to expect.",
+        epilog="Example: crossweft actions --json ui:admin-buttons")
+    actions.add_argument("id", nargs="?", help="one ui_actions id (bare or ui:<id>)")
+    actions.add_argument("--json", action="store_true", help="machine-readable output")
+
     impact = sub.add_parser("impact", help="which seams a change touches, and where the other "
                                            "side of each lives",
         description="List the seams that run through the changed (or given) files, the file "
@@ -329,6 +337,8 @@ def main(argv: list[str] | None = None) -> int:
         return engine.run_render(cfg, check_only=args.check)
     if command == "show":
         return engine.run_show(cfg, args.id)
+    if command == "actions":
+        return engine.run_actions(cfg, args.id, as_json=args.json)
     if command == "impact":
         if args.base and args.paths:
             engine.out("[ERR] impact takes either --base or explicit paths, not both")

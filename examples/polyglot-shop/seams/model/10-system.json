@@ -276,6 +276,11 @@
           "regex": "API_VERSION = \"([^\"]+)\""
         },
         {
+          "path": "web/public/app.js",
+          "side": "web",
+          "regex": "API_VERSION = \"([^\"]+)\""
+        },
+        {
           "path": "server/main.go",
           "side": "api",
           "regex": "APIVersion = \"([^\"]+)\""
@@ -289,6 +294,11 @@
       "points": [
         {
           "path": "web/src/api.ts",
+          "side": "web",
+          "regex": "VERSION_HEADER = \"([^\"]+)\""
+        },
+        {
+          "path": "web/public/app.js",
           "side": "web",
           "regex": "VERSION_HEADER = \"([^\"]+)\""
         },
@@ -424,5 +434,39 @@
       ]
     }
   ],
-  "findings": []
+  "findings": [],
+  "ui_actions": [
+    {
+      "id": "admin-buttons",
+      "name": "Admin page buttons reach an API route",
+      "link": "web-orders",
+      "routes": true,
+      "orphans": true,
+      "notes": "Three hand-written hops: the button's data-action, the ACTIONS table, and the route the handler fetches. `crossweft actions` prints the chain; smoke/click_smoke.py presses every button it lists.",
+      "controls": {
+        "label": "buttons in index.html",
+        "paths": [
+          "web/public/index.html"
+        ],
+        "regex": "data-action=\"([a-z-]+)\""
+      },
+      "hops": [
+        {
+          "label": "ACTIONS table",
+          "paths": [
+            "web/public/app.js"
+          ],
+          "within": "const ACTIONS = \\{([^}]*)\\}",
+          "regex": "\"([a-z-]+)\":\\s*(\\w+)"
+        },
+        {
+          "label": "route the handler fetches",
+          "paths": [
+            "web/public/app.js"
+          ],
+          "regex": "async function (\\w+)\\(\\)\\s*\\{[^}]*?fetch\\(\\s*[\"`]([^\"`]+)"
+        }
+      ]
+    }
+  ]
 }

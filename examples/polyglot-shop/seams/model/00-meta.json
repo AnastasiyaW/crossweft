@@ -11,7 +11,7 @@
     "route_scan": {
       "routers": [{"path": "server/main.go", "scanner": "go-chi"}],
       "router_search": ["server/**/*.go"],
-      "client_globs": ["web/src/**/*.ts"],
+      "client_globs": ["web/src/**/*.ts", "web/public/**/*.js"],
       "client_literal_regexes": ["[\"'`](/v1/[^\"'`$]*)"]
     },
     "coverage": {"roots": ["server", "web", "worker"]}

@@ -106,7 +106,7 @@ def session_message(cfg: Config) -> str:
         return (f"crossweft: the seam model has {len(errors)} schema error(s), first: {errors[0]}. "
                 "Tell the user; `crossweft check` shows all of them.")
     links = [l for l in model.entities["links"] if l["status"] == "current"]
-    guards = sum(len(model.entities[k]) for k in ("joins", "sets", "pairs"))
+    guards = sum(len(model.entities[k]) for k in ("joins", "sets", "pairs", "ui_actions"))
     return (f"crossweft: this repository declares its cross-component seams in "
             f"{cfg.model_dir.as_posix()} ({len(links)} current links, {guards} guards). When you "
             "edit a file on one side of a seam you will be told which other side to re-read; "
@@ -218,7 +218,7 @@ ADVICE = {
                "form): rewrite it that way. Only a deliberate use gets a finding with its reason.",
     "other": "Fix what the lines above name.",
 }
-DRIFT = {"joins", "sets", "pairs", "joints"}
+DRIFT = {"joins", "sets", "pairs", "joints", "ui"}
 MAP = {"seams", "evidence", "coverage", "provenance", "status", "agents"}
 
 

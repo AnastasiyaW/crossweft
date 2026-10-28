@@ -78,6 +78,24 @@ crossweft impact server/main.go
 crossweft impact --base origin/main
 ```
 
+## `crossweft actions`
+
+Prints, for each control of the model's `ui_actions`, every hop that takes it
+(a dispatch table, a registry, a handler's route) and where. Exit `0` when
+`check` would raise no `ui` or `anchor:ui:` problem for the selected entries, `1` when it would,
+`2` when nothing could be traced (an invalid model, or no `ui_actions`). A click
+smoke test can read `--json` to know what to press and which request to expect.
+
+| Flag | Meaning |
+|---|---|
+| `id` | one `ui_actions` id (bare or `ui:<id>`) |
+| `--json` | machine-readable output |
+
+```bash
+crossweft actions
+crossweft actions --json ui:admin-buttons
+```
+
 ## `crossweft show`
 
 Prints one block, link, flow, data item, guard or finding and what it connects

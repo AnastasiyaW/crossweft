@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.10 (2026-10-28)
+
+- `ui_actions`: a new guard that follows every UI control (a button's
+  `data-action`, a keyboard callback) through the hand-written tables that
+  dispatch it -- maps, registries, prefix rules -- to its handler and, with
+  `"routes": true`, to a route a link declares. A control nobody handles, a
+  handler no control sends to, and a key bound twice are problems
+  (`ui:<id>:dead|unrouted|orphan|conflict`; an `allow` that excuses nothing
+  is `stale-allow`). A UI request path ending in `/` is one request, not
+  every route below it. `crossweft actions [--json]`
+  prints each control's chain. The polyglot-shop example gains an admin page
+  and `smoke/click_smoke.py`, which presses every mapped button in Chromium and
+  waits for its request (with a self-test that must turn red on a handler that
+  throws).
+- The `crossweft` skill explains the `ui:` problems and `crossweft actions`;
+  after upgrading, re-run `crossweft agents`.
+
 ## 0.2.9 (2026-10-23)
 
 - `crossweft validators --incremental` for the stop hook: a self-test or normal run

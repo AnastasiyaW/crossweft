@@ -131,6 +131,24 @@ owner?), and the open findings. Everything else the check verifies.
 4. `crossweft check`, then `crossweft render` if the repository commits the
    generated docs.
 
+## Buttons and other UI controls
+
+A `ui_actions` entry follows each control (a button's `data-action`, a menu
+command, a keyboard callback) through the hand-written tables that dispatch it
+to its handler, and with `"routes": true` on to a route a link declares.
+
+- `crossweft actions` prints every control's chain; `--json` for a script.
+- `ui:<id>:dead` -- no handler takes the control: add the handler or fix the
+  control's name, on whichever side is wrong. `:unrouted` -- the chain reaches
+  no declared route. `:orphan` -- a handler no control sends to: remove it, or
+  restore the control. `:conflict` -- a key bound twice to different values.
+- Renaming an action means changing the control and every table that names it
+  in the same change.
+- `allow` (with a reason) is for a control that is meant to end without a
+  route, not for silencing a dead one.
+- The check proves the wiring in the source, not that the handler runs: where
+  the repository has a click smoke test, run it too.
+
 Field reference: `docs/model-reference.md`; every command and flag:
 `docs/cli.md` -- both in the crossweft repository.
 
