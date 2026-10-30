@@ -40,7 +40,11 @@ fails.
 Validators run in parallel (`CROSSWEFT_JOBS=1` forces serial; an invalid value
 is an error, not a default). Rows are always reported in name order.
 
-## Incremental runs (the stop hook)
+## Incremental runs (for your own stop hook)
+
+crossweft's own stop hook runs only `check --incremental`; add
+`crossweft validators --incremental` to your stop hook yourself if the suite
+should run there.
 
 A full suite can take many minutes -- too long to run every time an agent
 stops. `crossweft validators --incremental` reuses a phase (the self-test or

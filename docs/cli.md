@@ -96,6 +96,35 @@ crossweft actions
 crossweft actions --json ui:admin-buttons
 ```
 
+## `crossweft fallbacks`
+
+Lists every place in `fallbacks.include` where the code carries on after a
+failure, with its status in the registry: `unregistered`, `proposed`,
+`approved` or `rejected` (see [fallbacks.md](fallbacks.md)). Exit `0` when
+`check` would raise no `fallback` problem, `1` when it would, `2` when nothing
+could be scanned. `propose` registers sites for the owner's decision; `decide`
+records the decision, signed when `fallbacks.signers` is set.
+
+| Flag | Meaning |
+|---|---|
+| `propose <key or id>...` | register unregistered sites, or re-open entries whose code changed |
+| `decide <id> approve\|reject` | the owner's decision on one entry |
+| `--status` | list only `unregistered`, `proposed`, `approved` or `rejected` |
+| `--json` | machine-readable output |
+| `--md` | also write the map as Markdown to this repository-relative path |
+| `--all` | `propose`: every unregistered site |
+| `--behavior` | `propose`: what the code does when it fails here |
+| `--reason` | why the code carries on (`propose`) / the reason for the decision (`decide`) |
+| `--by` | who proposes / who decides |
+| `--wrapper` | `propose`: the site's function is a fallback wrapper; its calls are listed with it |
+| `--key` | `decide`: the owner's SSH key, when `fallbacks.signers` is set |
+
+```bash
+crossweft fallbacks --status proposed --md seams/fallbacks.md
+crossweft fallbacks propose --all --reason "inventory before review" --by agent
+crossweft fallbacks decide FB-0003 reject --reason "let the error surface" --by owner
+```
+
 ## `crossweft show`
 
 Prints one block, link, flow, data item, guard or finding and what it connects

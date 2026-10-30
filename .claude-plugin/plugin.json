@@ -1,6 +1,6 @@
 {
   "name": "crossweft",
-  "version": "0.2.10",
+  "version": "0.3.0",
   "description": "Guides coding agents through locating and checking cross-component contracts with Crossweft.",
   "author": {"name": "HappyIn", "url": "https://happyin.ai"},
   "homepage": "https://github.com/AnastasiyaW/crossweft",

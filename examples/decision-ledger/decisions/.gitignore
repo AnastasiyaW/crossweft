@@ -1,0 +1,4 @@
+# built by `python tools/ledger.py demo --key <your key>`; signatures are never committed here
+ledger.jsonl
+allowed_signers
+pending/

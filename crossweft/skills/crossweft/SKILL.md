@@ -149,6 +149,27 @@ to its handler, and with `"routes": true` on to a route a link declares.
 - The check proves the wiring in the source, not that the handler runs: where
   the repository has a click smoke test, run it too.
 
+## Fallbacks
+
+With `fallbacks` in `crossweft.json`, every place where the code carries on
+after a failure (a caught error not raised again, an environment default,
+`-ErrorAction SilentlyContinue`) must be in the registry. The owner decides
+each one; you never do.
+
+- `fallback:unregistered:<key>` -- you wrote or touched a fallback. First ask
+  whether the error should simply surface; if the fallback stays, register it:
+  `crossweft fallbacks propose <key> --behavior "what happens when it fails"
+  --reason "why carrying on is right here" --by <you>`, and tell the user it
+  waits for their decision.
+- A helper that hides a fallback (`read_or_default`) is proposed with
+  `--wrapper`, so each of its calls is listed with it. Do not move a fallback
+  into a helper to keep it off the map.
+- `fallback:rejected:<id>` -- the owner refused it: remove it and let the error
+  surface. `fallback:changed:<id>` -- an agreed fallback changed: propose it
+  again (`crossweft fallbacks propose <id> --reason ...`).
+- Never run `crossweft fallbacks decide`, edit a decision in the registry, or
+  sign one: approving and rejecting is the owner's.
+
 Field reference: `docs/model-reference.md`; every command and flag:
 `docs/cli.md` -- both in the crossweft repository.
 

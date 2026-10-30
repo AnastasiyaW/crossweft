@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0 (2026-10-30)
+
+- `fallbacks`: every place where the code carries on after a failure -- an error caught
+  and not raised again (Python, Go `if err != nil`, `catch` in JS/TS, C#, C/C++ and
+  PowerShell), `contextlib.suppress`, an environment variable read with a default,
+  PowerShell `SilentlyContinue` -- is checked against a registry of the owner's
+  decisions (`seams/fallbacks.json`). `check` fails on a fallback the registry does not
+  list, a refused one still in the code, an agreed one whose code changed, and an entry
+  whose site is gone; proposed ones are the queue of decisions, counted on every run.
+  A marker comment `fallback: FB-0001` ties a site to its entry; a helper that hides a
+  fallback is registered as a wrapper and its calls are listed with it. With
+  `fallbacks.signers`, a decision counts only with the owner's SSH signature.
+- `crossweft fallbacks` prints the map (`--json` for a script, `--md PATH` also writes it
+  as Markdown), `propose` registers sites
+  for a decision, `decide` records the owner's approve or reject.
+- The `crossweft` skill tells agents to propose fallbacks and never decide them; after
+  upgrading, re-run `crossweft agents`.
+- `feedback` in `crossweft.json`: how an agent reports a problem with crossweft itself.
+  When set, a failing `check` or `actions` and the agent hook messages about seams add one
+  line with it, naming the part involved, so reports say where crossweft got in the way.
+- `examples/decision-ledger`: agreed settings kept in a signed, append-only ledger. A later
+  chat that changes the code, the decisions file, an old entry, the signer file or the guard
+  a decision is bound to fails `check` or the example's validator.
+
 ## 0.2.10 (2026-10-28)
 
 - `ui_actions`: a new guard that follows every UI control (a button's

@@ -169,6 +169,29 @@ def build_parser() -> argparse.ArgumentParser:
     actions.add_argument("id", nargs="?", help="one ui_actions id (bare or ui:<id>)")
     actions.add_argument("--json", action="store_true", help="machine-readable output")
 
+    fb = sub.add_parser("fallbacks", help="map every place the code carries on after a failure, "
+                                          "and the owner's decision on each",
+        description="Without an action: list every fallback site in fallbacks.include with its "
+                    "registry status (unregistered, proposed, approved, rejected). `propose` "
+                    "registers sites for a decision (the agent's step); `decide` approves or "
+                    "rejects one (the owner's step, signed when fallbacks.signers is set).",
+        epilog="Examples: crossweft fallbacks --status proposed | crossweft fallbacks propose "
+               "--all --reason 'inventory' | crossweft fallbacks decide FB-0003 reject "
+               "--reason 'let it fail' --by owner")
+    fb.add_argument("action", nargs="?", choices=["propose", "decide"])
+    fb.add_argument("targets", nargs="*", help="propose: site keys or ids; decide: <id> "
+                                               "approve|reject")
+    fb.add_argument("--status", choices=["unregistered", "proposed", "approved", "rejected"])
+    fb.add_argument("--json", action="store_true", help="machine-readable output")
+    fb.add_argument("--md", metavar="PATH", help="also write the map as Markdown (repo-relative)")
+    fb.add_argument("--all", action="store_true", help="propose: every unregistered site")
+    fb.add_argument("--behavior", help="propose: what the code does when it fails here")
+    fb.add_argument("--reason", default="", help="why (propose) / the decision's reason (decide)")
+    fb.add_argument("--by", help="who proposes / decides")
+    fb.add_argument("--wrapper", action="store_true",
+                    help="propose: the site's function is a fallback wrapper; list its calls")
+    fb.add_argument("--key", help="decide: the owner's SSH key when fallbacks.signers is set")
+
     impact = sub.add_parser("impact", help="which seams a change touches, and where the other "
                                            "side of each lives",
         description="List the seams that run through the changed (or given) files, the file "
@@ -339,6 +362,17 @@ def main(argv: list[str] | None = None) -> int:
         return engine.run_show(cfg, args.id)
     if command == "actions":
         return engine.run_actions(cfg, args.id, as_json=args.json)
+    if command == "fallbacks":
+        if args.action is None:
+            return engine.run_fallbacks(cfg, args.status, as_json=args.json, markdown=args.md)
+        if args.action == "propose":
+            return engine.run_fallback_propose(cfg, args.targets, args.all, args.behavior,
+                                               args.reason, args.by, args.wrapper)
+        if len(args.targets) != 2:
+            engine.out("[ERR] decide <id> approve|reject --reason '...' --by <name>")
+            return 2
+        return engine.run_fallback_decide(cfg, args.targets[0], args.targets[1], args.reason,
+                                          args.by or "", args.key)
     if command == "impact":
         if args.base and args.paths:
             engine.out("[ERR] impact takes either --base or explicit paths, not both")

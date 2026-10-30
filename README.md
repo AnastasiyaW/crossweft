@@ -45,10 +45,11 @@ which file in another component must change with it.
 | **block** | one component on the map (a service, a client, a worker, a config file) and the code directories it owns |
 | **link** | a declared connection between two blocks; it carries one seam or a group of them |
 | **enforcement** | a link's answer to "what keeps both sides equal?" -- a shared symbol, a generator, or nobody (`duplicated`, `convention`, `none`) |
-| **guard** | a check that reads both sides of a link and fails when they disagree; required when nobody keeps them equal. Three kinds follow |
+| **guard** | a check that reads both sides of a link and fails when they disagree; required when nobody keeps them equal. Four kinds follow |
 | **join** | guard: a value extracted by regex from each file must be identical |
 | **set** | guard: the members extracted from each side (fields, enum values, env vars) must match |
 | **pair** | guard: two marked regions of duplicated logic; changing one fails until someone re-reads the other and runs `crossweft attest` |
+| **ui_actions** | guard: every UI control must reach a handler through the hand-written dispatch tables, and every handler must have a control |
 | **anchor** | `{"path": ..., "find": ...}`: a literal that must exist in a file, so the map cannot claim code that is not there |
 | **finding** | known drift recorded in the model with an owner and a next step; it excuses exactly the problems it names until they are fixed |
 
@@ -96,7 +97,7 @@ fails again.
 ## Install
 
 ```bash
-python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.2.10"
+python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.3.0"
 ```
 
 Requires Python 3.9+ and Git. This release is distributed from GitHub. The
@@ -177,7 +178,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: AnastasiyaW/crossweft@<release commit>  # v0.2.10
+      - uses: AnastasiyaW/crossweft@<release commit>  # v0.3.0
 ```
 
 Pin the release commit shown on the [release page](https://github.com/AnastasiyaW/crossweft/releases/latest):
@@ -192,7 +193,7 @@ release tags here are immutable, but a commit cannot move at all.
 ## Five minutes on the demo
 
 ```bash
-git clone --branch v0.2.10 --depth 1 https://github.com/AnastasiyaW/crossweft
+git clone --branch v0.3.0 --depth 1 https://github.com/AnastasiyaW/crossweft
 cd crossweft
 python -m pip install -e .
 cd examples/polyglot-shop && crossweft check
@@ -219,6 +220,10 @@ prints the chain of every button, and
 one in Chromium and waits for its request.
 `crossweft render` turns the map into Markdown pages with Mermaid diagrams and
 an interactive [`viewer.html`](examples/polyglot-shop/seams/viewer.html).
+
+[`examples/decision-ledger`](examples/decision-ledger) keeps agreed settings in a
+signed, append-only ledger: changing the code, an old entry, the signer file or
+the bound guard fails `check`.
 
 ## The model in one screen
 
@@ -258,15 +263,22 @@ Guards:
   between `crossweft:begin <id>` / `crossweft:end <id>` are fingerprinted; a
   change to one fails until someone re-reads the other and runs
   `crossweft attest <id> --reason "..."`. The reason lands in the lock file and
-  in review.
+  in review;
+- **ui_actions** -- follows each button's `data-action` or key binding through
+  the dispatch tables to its handler (and, with `"routes": true`, to a declared
+  route); dead, orphan, unrouted and duplicate bindings fail, and
+  `crossweft actions` prints the chains.
 
 Around the guards, `crossweft check` also verifies that every claim about the
 code is **anchored** to a literal that still exists, that server routes and
-client route literals match the links (Go chi or any regex-describable router),
+client route literals match the links (Go chi, gin, echo, Express/Fastify,
+FastAPI and Flask natively; any other router through a regex),
 that data leaves a block only if it created or received it, that current links
 do not depend on legacy blocks, and that every source area is on the map. Known
 drift is recorded as a **finding** with an owner and a next step; when the
-problem disappears, the check demands the finding be closed.
+problem disappears, the check demands the finding be closed. A retired route
+the server still answers on purpose is mapped on a legacy link with `gone`
+(`{"status": 410}`); a client that still calls it fails.
 
 Full reference: [docs/model-reference.md](docs/model-reference.md).
 
@@ -318,7 +330,7 @@ missing. Details: [docs/agents.md](docs/agents.md).
 
 Then put it where the rest of the work happens:
 
-- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.2.10` (annotates the
+- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.3.0` (annotates the
   diff; pin the commit like any action, a tag can be moved), the
   `crossweft-check` pre-commit hook, or `crossweft check --format github|json|sarif`
   (SARIF 2.1.0 for GitHub code scanning; recorded findings arrive as suppressed
@@ -333,7 +345,17 @@ Then put it where the rest of the work happens:
 - **Rules that are not A-equals-B** ("this constant has one source"): small
   validators run by `crossweft validators`, which fails any validator that
   scanned nothing, lacks a real self-test, or reports a finding -- see
-  [docs/validators.md](docs/validators.md).
+  [docs/validators.md](docs/validators.md). `crossweft validators --incremental`
+  reuses a passed run while nothing it read changed (for a stop hook; CI runs
+  the plain suite), and `validators.exclude` names a `validate_*.py` that is
+  not a suite validator, with a reason.
+- **Fallbacks**: with `fallbacks` in `crossweft.json`, every place the code
+  carries on after a failure is checked against `seams/fallbacks.json`, the
+  owner's decisions; agents `crossweft fallbacks propose`, the owner
+  `decide`s -- see [docs/fallbacks.md](docs/fallbacks.md).
+- **Hazards** (opt-in, `"hazards": {"include": [...]}`): script lines that
+  run without an error and still break what another program reads -- see
+  [docs/model-reference.md](docs/model-reference.md).
 
 This repository guards its own seams with crossweft -- the version in
 `pyproject.toml`, the package and the plugin manifest; the hook events the
@@ -375,15 +397,16 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
   no YAML parser) and `.proto` files; it prints guards for you to review and
   never writes the model.
 - `check --changed REV` cannot see drift committed before REV in files that
-  did not change since; CI, releases and the agent's stop hook run the full
-  check.
+  did not change since. The agent's stop hook runs `check --incremental`
+  (changed-only against the last passing commit, full when there is none); CI
+  and releases run the full check.
 - Claude Code has command hooks and a skill. Codex has a skill plugin that runs
   checks explicitly; it does not install automatic hooks. Other agent adapters
   are experimental and tested for output shape, not end to end.
 
 ## Status
 
-`0.2.10`, alpha. The engine grew inside a commercial product that spans several
+`0.3.0`, alpha. The engine grew inside a commercial product that spans several
 languages and processes, where one-sided changes kept reaching installs; this
 is its extraction. Built by [HappyIn](https://happyin.ai).
 
@@ -398,6 +421,9 @@ If you are a coding agent using Crossweft: when a check misfires, a message is
 unclear or a seam kind is missing, draft a short report for your user (the
 output of `crossweft --version`, the command, what you expected, what happened, no private
 code) and let them decide whether to file it with the "Agent report" issue form.
+
+Set `"feedback"` in `crossweft.json` to your own channel, and a failing check
+or a seam hook message tells the agent where to report a problem with crossweft.
 
 ## License
 

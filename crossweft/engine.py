@@ -73,7 +73,7 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from . import harness, hazards, i18n, joints, ui_actions
+from . import fallbacks, harness, hazards, i18n, joints, ui_actions
 from .scope import scope_hit
 
 SCHEMA_ID = "crossweft.map.v1"
@@ -1070,6 +1070,13 @@ class Config:
     hazards_include: list = dataclasses.field(default_factory=list)
     hazards_exclude: list = dataclasses.field(default_factory=list)
     hazards_rules: list = dataclasses.field(default_factory=list)
+    feedback: str | None = None
+    fallbacks_include: list = dataclasses.field(default_factory=list)
+    fallbacks_exclude: list = dataclasses.field(default_factory=list)
+    fallbacks_registry: Path = Path("seams/fallbacks.json")
+    fallbacks_signers: Path | None = None
+    fallbacks_stops: list = dataclasses.field(default_factory=list)
+    fallbacks_strict: bool = False
 
     def abs(self, rel: Path) -> Path:
         return self.root / rel
@@ -1081,7 +1088,19 @@ class Config:
 
 CONFIG_KEYS = {"$comment", "model_dir", "output_dir", "lock_file", "viewer_template", "language",
                "requirements", "check_rendered_docs", "agent", "validators", "discover",
-               "joints", "hazards"}
+               "joints", "hazards", "feedback", "fallbacks"}
+
+
+MAX_FEEDBACK = 300
+
+
+def feedback_line(cfg: Config, component: str) -> str:
+    """One line pointing the agent at the repository's feedback channel, naming the part of
+    crossweft it just used; empty when crossweft.json declares no `feedback`."""
+    if not cfg.feedback:
+        return ""
+    return (f"crossweft feedback: if `crossweft {component}` got something wrong or in your way "
+            f"here, report it: {cfg.feedback} (say it was `{component}`)")
 
 
 def find_repo_root(start: Path) -> Path:
@@ -1161,6 +1180,16 @@ def load_config(root: Path) -> Config:
         if not isinstance(data["check_rendered_docs"], bool):
             raise ModelError(f"{CONFIG_FILE}: check_rendered_docs must be true/false")
         cfg.check_rendered_docs = data["check_rendered_docs"]
+    if "feedback" in data:
+        value = data["feedback"]
+        # one line, no control characters: in `--format github` a newline would start a workflow
+        # command (::error::) and a fake "RESULT: PASS" line could follow it
+        if (not isinstance(value, str) or not value.strip() or len(value) > MAX_FEEDBACK
+                or any(ord(c) < 32 or ord(c) == 127 for c in value)):
+            raise ModelError(f"{CONFIG_FILE}: feedback must be one line of at most {MAX_FEEDBACK} "
+                             "characters without control characters (how an agent reports a "
+                             "crossweft problem)")
+        cfg.feedback = value.strip()
     agent = sub_object("agent", {"stop", "harness", "command"})
     if "command" in agent and (not isinstance(agent["command"], str)
                                or not agent["command"].strip()):
@@ -1236,6 +1265,40 @@ def load_config(root: Path) -> Config:
             raise ModelError(f"{CONFIG_FILE}: hazards.rules must be a non-empty list of "
                              f"{sorted(hazards.RULES)}")
         cfg.hazards_rules = list(rules)
+    fallback_cfg = sub_object("fallbacks", {"include", "exclude", "registry", "signers", "stops",
+                                            "strict"})
+    if fallback_cfg:
+        def fglobs(key: str, required: bool) -> list:
+            value = fallback_cfg.get(key, [])
+            if (required and not value) or not isinstance(value, list) or not all(
+                    isinstance(g, str) and g and not g.startswith(("/", "\\"))
+                    and ".." not in g.split("/") for g in value):
+                raise ModelError(f"{CONFIG_FILE}: fallbacks.{key} must be a "
+                                 f"{'non-empty ' if required else ''}list of "
+                                 "repository-relative globs")
+            return list(value)
+        cfg.fallbacks_include = fglobs("include", True)
+        cfg.fallbacks_exclude = fglobs("exclude", False)
+        if "registry" in fallback_cfg:
+            cfg.fallbacks_registry = rel_path("fallbacks.registry", fallback_cfg["registry"])
+        if "signers" in fallback_cfg:
+            value = fallback_cfg["signers"]
+            if not isinstance(value, str) or not value.strip():
+                raise ModelError(f"{CONFIG_FILE}: fallbacks.signers must be a path")
+            # outside the repository (absolute or ~) keeps the trusted keys out of an
+            # agent's edits; a repository-relative path is allowed and reported
+            expanded = Path(os.path.expanduser(value))
+            cfg.fallbacks_signers = expanded if expanded.is_absolute() else \
+                rel_path("fallbacks.signers", value)
+        if "strict" in fallback_cfg:
+            if not isinstance(fallback_cfg["strict"], bool):
+                raise ModelError(f"{CONFIG_FILE}: fallbacks.strict must be true/false")
+            cfg.fallbacks_strict = fallback_cfg["strict"]
+        stops = fallback_cfg.get("stops", [])
+        if not isinstance(stops, list) or not all(
+                isinstance(s, str) and re.fullmatch(r"[A-Za-z_][\w.-]*", s) for s in stops):
+            raise ModelError(f"{CONFIG_FILE}: fallbacks.stops must be a list of function names")
+        cfg.fallbacks_stops = list(stops)
     return cfg
 
 
@@ -3655,6 +3718,7 @@ class Checker:
         self.check_agents()
         self.check_joints()
         self.check_hazards()
+        self.check_fallbacks()
 
     def check_hazards(self) -> None:
         """Built-in hazard rules (crossweft/hazards.py) over the files named by
@@ -3680,6 +3744,160 @@ class Checker:
             for hit, key in zip(hits, hazards.keys(rel, hits)):
                 self.add(key, "hazards", f"{hit.rule}: {hit.message} (`{hit.text}`)",
                          path=rel, line=hit.line)
+
+    def fallback_sites(self) -> tuple[list[fallbacks.Site], dict[str, str]]:
+        """Every fallback site in `fallbacks.include` and the text of each scanned file; a
+        glob naming no file and a file that cannot be scanned are fatal problems."""
+        cfg = self.model.cfg
+        files, empty = self.expand_entries(cfg.fallbacks_include, cfg.fallbacks_exclude)
+        for pattern in empty:
+            self.add(f"fallback-config:empty:{pattern}", "fallbacks",
+                     f"fallbacks.include entry '{pattern}' names no file -- fix the glob or "
+                     f"remove it from {CONFIG_FILE}", fatal=True)
+        sites: list[fallbacks.Site] = []
+        texts: dict[str, str] = {}
+        for rel in files:
+            text = self.text(rel)
+            if text is None:
+                self.add(f"fallback-config:unreadable:{rel}", "fallbacks",
+                         f"{rel} could not be read as UTF-8 text -- fix it or exclude it in "
+                         "fallbacks.exclude", fatal=True, path=rel)
+                continue
+            result = fallbacks.scan(rel, text, frozenset(cfg.fallbacks_stops))
+            if isinstance(result, str):
+                self.add(f"fallback-config:unscanned:{rel}", "fallbacks",
+                         f"{rel}: {result} -- exclude it in fallbacks.exclude or fix it",
+                         fatal=True, path=rel)
+                continue
+            self.items_checked += 1
+            texts[rel] = text
+            sites.extend(result)
+        return sites, texts
+
+    def check_fallbacks(self) -> None:
+        """Every fallback site is in the registry; refused ones are gone; agreed ones are
+        unchanged; every entry still has its site (crossweft/fallbacks.py)."""
+        cfg = self.model.cfg
+        if not cfg.fallbacks_include:
+            return
+        # simplification: always a full scan; scope by changed files when it gets slow
+        self.guards_total += 1
+        self.guards_run += 1
+        registry = cfg.fallbacks_registry.as_posix()
+        try:
+            entries, last_id = fallbacks.load_registry(cfg.abs(cfg.fallbacks_registry))
+        except fallbacks.RegistryError as exc:
+            self.add("fallback-config:registry", "fallbacks", str(exc), fatal=True, path=registry)
+            return
+        sites, texts = self.fallback_sites()
+        result = fallbacks.match(sites, entries)
+        wrappers = {e["symbol"] for e in entries if e.get("wrapper")}
+        uses = {rel: fallbacks.wrapper_calls(rel, text, wrappers) for rel, text in texts.items()}
+        self.fallback_report = {"entries": entries, "match": result, "uses": uses,
+                                "last_id": last_id}
+        for key, site in fallbacks.keyed(result.unregistered):
+            self.add(f"fallback:unregistered:{key}", "fallbacks",
+                     f"{site.symbol}: {fallbacks.KINDS[site.kind]} (`{site.text}`) and "
+                     f"{registry} does not list it -- register it for the owner's decision: "
+                     f"crossweft fallbacks propose {key} --behavior '...' --reason '...'",
+                     fatal=True, path=site.path, line=site.line)
+        for site, why in result.unknown_markers:
+            self.add(f"fallback:unknown-marker:{site.path}:{site.line}", "fallbacks",
+                     f"marker `fallback: {site.marker}` {why} -- a marker ties one site to "
+                     "its own entry; propose this site instead", fatal=True, path=site.path,
+                     line=site.line)
+        signed = self.fallback_signers()
+        previous = self.fallback_registry_at_head()
+        for entry in entries:
+            ident = entry["id"]
+            found = result.by_entry.get(ident, [])
+            called = [(rel, line) for rel, calls in uses.items()
+                      for name, line in calls if name == entry["symbol"]] \
+                if entry.get("wrapper") else []
+            if not found:
+                self.add(f"fallback:stale:{ident}", "fallbacks",
+                         f"{ident}: {entry['symbol']} in {entry['path']} no longer has this "
+                         f"{entry['kind']} -- remove the entry", fatal=True, path=registry)
+            if entry["status"] == "rejected" and (found or called):
+                where = found[0].path if found else called[0][0]
+                line = found[0].line if found else called[0][1]
+                self.add(f"fallback:rejected:{ident}", "fallbacks",
+                         f"{ident} was refused ({entry['reason']}) and is still in the code -- "
+                         "remove it and let the error surface", fatal=True, path=where, line=line)
+            if entry["status"] == "approved" and ident in result.changed:
+                site = result.changed[ident][0]
+                self.add(f"fallback:changed:{ident}", "fallbacks",
+                         f"{ident} was agreed as it was and its code changed since -- propose "
+                         f"it again: crossweft fallbacks propose {ident} --reason '...'",
+                         fatal=True, path=site.path, line=site.line)
+            if entry["status"] == "proposed" and cfg.fallbacks_strict:
+                self.add(f"fallback:undecided:{ident}", "fallbacks",
+                         f"{ident} waits for the owner's decision and fallbacks.strict is on: "
+                         f"{entry['behavior']}", fatal=True,
+                         path=found[0].path if found else registry,
+                         line=found[0].line if found else None)
+            if signed is not None and entry["status"] != "proposed":
+                problem = signed(entry)
+                if problem:
+                    self.add(f"fallback:unsigned:{ident}", "fallbacks",
+                             f"{ident}: the {entry['status']} decision {problem}", fatal=True,
+                             path=registry)
+            before = previous.get(ident)
+            if before is not None and entry.get("rev", 0) < before.get("rev", 0):
+                self.add(f"fallback:rollback:{ident}", "fallbacks",
+                         f"{ident} is at revision {entry.get('rev', 0)}, older than "
+                         f"{before.get('rev', 0)} in the last commit -- an older decision was "
+                         "put back", fatal=True, path=registry)
+        if signed is None and any(e.get("sig") for e in entries):
+            self.add("fallback-config:signing-off", "fallbacks",
+                     f"{registry} holds signed decisions but fallbacks.signers is not set -- "
+                     "signing cannot be switched off while signed decisions exist", fatal=True,
+                     path=CONFIG_FILE)
+        waiting = sum(1 for e in entries if e["status"] == "proposed")
+        if waiting and not cfg.fallbacks_strict:
+            self.info.append(f"fallbacks: {waiting} of {len(entries)} wait for the owner's "
+                             "decision (crossweft fallbacks --status proposed)")
+        if signed is None and any(e["status"] != "proposed" for e in entries):
+            self.info.append("fallbacks: decisions are not signed (no fallbacks.signers), so "
+                             "anyone who can edit the registry can approve")
+        if signed is not None and not cfg.fallbacks_signers.is_absolute():
+            self.info.append("fallbacks: the trusted keys are inside the repository, where an "
+                             "agent can edit them -- keep them outside (an absolute path)")
+
+    def fallback_registry_at_head(self) -> dict[str, dict]:
+        """The registry entries as committed at HEAD, by id ({} outside git or when the file
+        is new): an entry whose revision went down was put back from older history."""
+        cfg = self.model.cfg
+        rel = cfg.fallbacks_registry.as_posix()
+        try:
+            done = subprocess.run(["git", "show", f"HEAD:{rel}"], cwd=str(cfg.root),
+                                  capture_output=True, text=True, encoding="utf-8", timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return {}
+        if done.returncode != 0:
+            return {}
+        try:
+            data = json.loads(done.stdout)
+        except ValueError:
+            return {}
+        return {e.get("id"): e for e in data.get("fallbacks", []) if isinstance(e, dict)}
+
+    def fallback_signers(self):
+        """With fallbacks.signers, a function telling why a decision's signature does not
+        verify (None when it does); None when signing is off."""
+        cfg = self.model.cfg
+        if cfg.fallbacks_signers is None:
+            return None
+        signers = cfg.fallbacks_signers if cfg.fallbacks_signers.is_absolute() \
+            else cfg.abs(cfg.fallbacks_signers)
+
+        def check(entry: dict) -> str | None:
+            if not signers.is_file():
+                return f"cannot be verified: {signers.as_posix()} is missing"
+            if not entry.get("sig"):
+                return "is not signed"
+            return fallbacks.verify(entry, signers)
+        return check
 
     def check_agents(self) -> None:
         """With agent.harness, the repository must carry its own agent harness
@@ -4064,6 +4282,8 @@ def print_result(cfg: Config, result: CheckResult, fmt: str = "text") -> None:
               if partial else "  (full check; --changed fell back)"
               if result.changed and result.changed["fallback"] else "")
     out(f"SCANNED: files={result.files} items={result.items}{suffix}")
+    if not result.ok and feedback_line(cfg, "check"):
+        out(feedback_line(cfg, "check"))
 
 
 def _changed_only(result: CheckResult) -> dict | None:
@@ -4999,6 +5219,212 @@ def _trace_row(trace: ui_actions.Trace) -> dict:
                       for step in trace.steps]}
 
 
+def _fallback_checker(cfg: Config):
+    """A checker that has run only the fallback check; (checker, None) or (None, error)."""
+    if not cfg.fallbacks_include:
+        return None, f"{CONFIG_FILE} declares no fallbacks -- add \"fallbacks\": {{\"include\": [...]}}"
+    try:
+        model = load_model(cfg)
+    except ModelError as exc:
+        return None, str(exc)
+    checker = Checker(model)
+    checker.check_fallbacks()
+    if not hasattr(checker, "fallback_report"):
+        bad = [p.message for p in checker.problems if p.key.startswith("fallback-config:")]
+        return None, "; ".join(bad) or "the fallback registry could not be read"
+    return checker, None
+
+
+def _fallback_rows(checker) -> list[dict]:
+    report = checker.fallback_report
+    rows = []
+    for entry in report["entries"]:
+        sites = report["match"].by_entry.get(entry["id"], [])
+        calls = [{"path": rel, "line": line} for rel, found in report["uses"].items()
+                 for name, line in found if entry.get("wrapper") and name == entry["symbol"]]
+        rows.append({**{k: entry.get(k) for k in ("id", "status", "kind", "path", "symbol",
+                                                   "behavior", "reason", "by", "at",
+                                                   "proposed_by")},
+                     "wrapper": bool(entry.get("wrapper")),
+                     "lines": [s.line for s in sites], "text": sites[0].text if sites else "",
+                     "changed": entry["id"] in report["match"].changed, "calls": calls})
+    for key, site in fallbacks.keyed(report["match"].unregistered):
+        rows.append({"id": None, "key": key, "status": "unregistered", "kind": site.kind,
+                     "path": site.path, "symbol": site.symbol, "lines": [site.line],
+                     "text": site.text, "behavior": fallbacks.KINDS[site.kind], "reason": "",
+                     "wrapper": False, "changed": False, "calls": []})
+    return rows
+
+
+def _fallback_markdown(rows: list[dict]) -> str:
+    order = ("unregistered", "rejected", "proposed", "approved")
+    lines = ["# Fallbacks", "",
+             "Every place where the code carries on after a failure, and the decision on it. "
+             "Generated by `crossweft fallbacks --md`; do not edit.", ""]
+    counts = {s: sum(1 for r in rows if r["status"] == s) for s in order}
+    lines.append(" | ".join(f"{s}: {counts[s]}" for s in order))
+    for status in order:
+        group = [r for r in rows if r["status"] == status]
+        if not group:
+            continue
+        lines += ["", f"## {status} ({len(group)})", "",
+                  "| id | where | kind | what happens | reason |", "|---|---|---|---|---|"]
+        for r in sorted(group, key=lambda r: (r["path"], r["lines"][:1])):
+            where = f"`{r['path']}:{r['lines'][0] if r['lines'] else '?'}` {r['symbol']}"
+            kind = r["kind"] + (" (wrapper, %d calls)" % len(r["calls"]) if r["wrapper"] else "")
+            cell = lambda s: (s or "").replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| {r['id'] or r.get('key')} | {cell(where)} | {kind} | "
+                         f"{cell(r['behavior'])} | {cell(r['reason'])} |")
+    return "\n".join(lines) + "\n"
+
+
+def run_fallbacks(cfg: Config, status: str | None = None, as_json: bool = False,
+                  markdown: str | None = None) -> int:
+    """The map of fallbacks: 0 when `check` raises no fallback problem, 1 when it does,
+    2 when nothing could be scanned."""
+    checker, error = _fallback_checker(cfg)
+    if checker is None:
+        out(f"[ERR] {error}")
+        return 2
+    rows = _fallback_rows(checker)
+    problems = [p for p in checker.problems if p.key.startswith(("fallback:", "fallback-config:"))]
+    shown = [r for r in rows if status in (None, r["status"])]
+    if markdown:
+        target = cfg.abs(Path(markdown))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(_fallback_markdown(rows), encoding="utf-8")
+    if as_json:
+        print(json.dumps({"ok": not problems, "fallbacks": shown,
+                          "problems": [{"key": p.key, "message": p.message, "path": p.path,
+                                        "line": p.line} for p in problems]}, indent=2))
+    else:
+        for r in shown:
+            where = f"{r['path']}:{','.join(map(str, r['lines'])) or '?'}"
+            label = r["id"] or r["key"]
+            flag = " CHANGED" if r["changed"] else ""
+            out(f"[{r['status']}{flag}] {label}  {where}  {r['symbol']}  {r['kind']}"
+                + (f"  wrapper, {len(r['calls'])} call(s)" if r["wrapper"] else ""))
+            out(f"    {r['behavior']}" + (f" -- {r['reason']}" if r["reason"] else ""))
+        counts = {}
+        for r in rows:
+            counts[r["status"]] = counts.get(r["status"], 0) + 1
+        out(f"fallbacks: {len(rows)} -- " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+        for p in problems:
+            out(f"[ERR] {p.key}: {p.message}")
+    return 1 if problems else 0
+
+
+def run_fallback_propose(cfg: Config, targets: list[str], every: bool, behavior: str | None,
+                         reason: str, by: str | None, wrapper: bool) -> int:
+    """Register sites (by key) or re-open entries (by id) as proposed: the agent's step.
+    Nothing it writes is agreed until the owner decides."""
+    checker, error = _fallback_checker(cfg)
+    if checker is None:
+        out(f"[ERR] {error}")
+        return 2
+    if not reason.strip():
+        out("[ERR] --reason must say why the code carries on here")
+        return 2
+    report = checker.fallback_report
+    entries = [dict(e) for e in report["entries"]]
+    last_id = report["last_id"]
+    by_id = {e["id"]: e for e in entries}
+    by_key = dict(fallbacks.keyed(report["match"].unregistered))
+    wanted = list(by_key) if every else targets
+    if not wanted:
+        out("[ERR] name site keys or ids, or pass --all (nothing is unregistered)" if every
+            else "[ERR] name site keys or ids, or pass --all")
+        return 2
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    done = []
+    for target in wanted:
+        if target in by_id:
+            entry = by_id[target]
+            sites = report["match"].by_entry.get(target, [])
+            if not sites:
+                out(f"[ERR] {target}: its site is gone from the code -- remove the entry instead")
+                return 1
+            entry.update(digest=sites[0].digest, symbol=sites[0].symbol, status="proposed",
+                         reason=reason.strip(), proposed_by=by or "agent", at=stamp,
+                         rev=entry.get("rev", 0) + 1)
+            if behavior:
+                entry["behavior"] = behavior.strip()
+            for field in ("by", "sig"):
+                entry.pop(field, None)
+            done.append(target)
+        elif target in by_key:
+            site = by_key[target]
+            ident = fallbacks.next_id(last_id)
+            last_id += 1
+            entry = {"id": ident, "path": site.path, "symbol": site.symbol,
+                     "kind": site.kind, "digest": site.digest,
+                     "behavior": (behavior or f"{fallbacks.KINDS[site.kind]} ({site.text})").strip(),
+                     "reason": reason.strip(), "status": "proposed",
+                     "proposed_by": by or "agent", "at": stamp, "rev": 1}
+            if wrapper:
+                entry["wrapper"] = True
+            entries.append(entry)
+            done.append(f"{entry['id']} <- {target}")
+        else:
+            out(f"[ERR] {target}: neither an unregistered site key nor a registry id "
+                "(run `crossweft fallbacks` for both)")
+            return 1
+    fallbacks.save_registry(cfg.abs(cfg.fallbacks_registry), entries, last_id)
+    for line in done:
+        out(f"[OK] proposed {line}")
+    out(f"{len(done)} fallback(s) wait for the owner's decision: crossweft fallbacks decide <id> "
+        "approve|reject --reason '...' --by <name>")
+    return 0
+
+
+def run_fallback_decide(cfg: Config, ident: str, verdict: str, reason: str, by: str,
+                        key: str | None) -> int:
+    """The owner's step: approve or reject one proposed entry; signed when
+    fallbacks.signers is set."""
+    checker, error = _fallback_checker(cfg)
+    if checker is None:
+        out(f"[ERR] {error}")
+        return 2
+    if verdict not in ("approve", "reject") or not reason.strip() or not by.strip():
+        out("[ERR] decide <id> approve|reject --reason '...' --by <name>")
+        return 2
+    report = checker.fallback_report
+    entries = [dict(e) for e in report["entries"]]
+    entry = next((e for e in entries if e["id"] == ident), None)
+    if entry is None:
+        out(f"[ERR] no registry entry {ident}")
+        return 1
+    if ident in report["match"].changed or not report["match"].by_entry.get(ident):
+        out(f"[ERR] {ident}: its code is not what was proposed (changed or gone) -- propose "
+            "it again first, so the decision is about the code as it is now")
+        return 1
+    out(f"{ident}  {entry['path']}  {entry['symbol']}  {entry['kind']}")
+    out(f"  what happens: {entry['behavior']}")
+    out(f"  proposed: {entry['reason']} ({entry.get('proposed_by', '?')})")
+    entry.update(status="approved" if verdict == "approve" else "rejected",
+                 reason=reason.strip(), by=by.strip(), rev=entry.get("rev", 0) + 1,
+                 at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    entry.pop("sig", None)
+    if cfg.fallbacks_signers is not None:
+        if not key:
+            out(f"[ERR] {CONFIG_FILE} sets fallbacks.signers: sign with --key <the owner's key>")
+            return 2
+        try:
+            entry["sig"] = fallbacks.sign(entry, Path(key).expanduser())
+        except fallbacks.RegistryError as exc:
+            out(f"[ERR] {exc}")
+            return 1
+        signers = cfg.fallbacks_signers if cfg.fallbacks_signers.is_absolute() \
+            else cfg.abs(cfg.fallbacks_signers)
+        problem = fallbacks.verify(entry, signers)
+        if problem:
+            out(f"[ERR] the new signature {problem} against {cfg.fallbacks_signers.as_posix()}")
+            return 1
+    fallbacks.save_registry(cfg.abs(cfg.fallbacks_registry), entries, report["last_id"])
+    out(f"[OK] {ident} {entry['status']}")
+    return 0
+
+
 def run_actions(cfg: Config, ident: str | None = None, as_json: bool = False) -> int:
     """Print the chain of every control: which hop takes it, and where. 0 when
     `check` would raise no problem for the selected entries, 1 when it would, 2
@@ -5055,6 +5481,8 @@ def run_actions(cfg: Config, ident: str | None = None, as_json: bool = False) ->
             if not problem.key.startswith(tuple(f"ui:{e['id']}:{kind}:" for e in entries
                                                 for kind in ("dead", "unrouted"))):
                 out(f"[ERR] {problem.message}")   # dead/unrouted are shown under their control
+        if not ok and feedback_line(cfg, "actions"):
+            out(feedback_line(cfg, "actions"))
     return 0 if ok else (2 if not all(row["traced"] for row in rows) else 1)
 
 

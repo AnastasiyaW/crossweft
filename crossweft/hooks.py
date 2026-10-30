@@ -33,7 +33,7 @@ from pathlib import Path
 
 from .harness import project_hooks_run
 from .engine import (CONFIG_FILE, Config, ModelError, _normalize_paths, build_impact, evaluate,
-                     evaluate_incremental,
+                     evaluate_incremental, feedback_line,
                      find_repo_root, load_config, load_model, validate_schema, ImpactError)
 
 AGENTS = ("claude-code", "codex", "gemini", "copilot", "cursor")
@@ -96,6 +96,11 @@ def _continuing(payload: dict) -> bool:
 # agent-neutral messages
 # --------------------------------------------------------------------------- #
 
+def _with_feedback(cfg: Config, component: str) -> str:
+    line = feedback_line(cfg, component)
+    return "\n" + line if line else ""
+
+
 def session_message(cfg: Config) -> str:
     try:
         model = load_model(cfg)
@@ -111,7 +116,8 @@ def session_message(cfg: Config) -> str:
             f"{cfg.model_dir.as_posix()} ({len(links)} current links, {guards} guards). When you "
             "edit a file on one side of a seam you will be told which other side to re-read; "
             "keep both sides in agreement. `crossweft impact` lists the seams your change "
-            "touches; `crossweft check` must pass before you finish.")
+            "touches; `crossweft check` must pass before you finish."
+            + _with_feedback(cfg, "hook session-start"))
 
 
 def post_edit_message(cfg: Config, raw_paths: list[str], cwd: Path | None = None
@@ -169,7 +175,7 @@ def post_edit_message(cfg: Config, raw_paths: list[str], cwd: Path | None = None
     names = ", ".join(inside_paths)
     return (f"crossweft: {names} is part of {seams} cross-component seam(s). Keep both sides in "
             "agreement:\n" + "\n".join(lines)
-            + "\nRun `crossweft check` before you finish.")
+            + "\nRun `crossweft check` before you finish." + _with_feedback(cfg, "hook post-edit"))
 
 
 def stop_message(cfg: Config) -> tuple[bool, str, list[str]]:
@@ -199,7 +205,7 @@ def stop_message(cfg: Config) -> tuple[bool, str, list[str]]:
                   + [f"render:{n}" for n in result.render_stale])
     reason = ("crossweft check fails:\n"
               + "\n".join(f"- {line}" for line in result.failure_lines()) + "\n"
-              + _advice(cfg, result))
+              + _advice(cfg, result) + _with_feedback(cfg, "hook stop"))
     return False, reason, keys
 
 

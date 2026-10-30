@@ -1,0 +1,11 @@
+[
+  {"id": "D-0001", "op": "decide", "subject": "imagegen.sampler", "value": "dpmpp_2m_sde",
+   "binds": ["join:imagegen-sampler"], "text": "Sampler fixed after an A/B on skin detail.",
+   "proposed_by": "agent"},
+  {"id": "D-0002", "op": "decide", "subject": "imagegen.steps", "value": 28,
+   "binds": ["join:imagegen-steps"], "text": "28 steps: no gain above, banding below.",
+   "proposed_by": "agent"},
+  {"id": "D-0003", "op": "decide", "subject": "imagegen.loras",
+   "value": ["film-grain-v1", "skin-detail-v3"], "binds": ["set:imagegen-loras"],
+   "text": "The two LoRAs the reference set was approved with.", "proposed_by": "agent"}
+]

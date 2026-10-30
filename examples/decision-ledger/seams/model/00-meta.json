@@ -1,0 +1,10 @@
+{
+  "meta": {
+    "schema": "crossweft.map.v1",
+    "title": "Decision ledger example",
+    "lanes": [
+      {"id": "decisions", "name": "Agreed decisions"},
+      {"id": "runtime", "name": "Runtime"}
+    ]
+  }
+}

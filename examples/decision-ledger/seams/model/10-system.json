@@ -1,0 +1,34 @@
+{
+  "blocks": [
+    {"id": "decisions", "name": "Decision ledger", "kind": "store", "lane": "decisions",
+     "status": "current", "summary": "Signed, append-only record of what the owner agreed; current.json is its fold.",
+     "code": ["decisions/"]},
+    {"id": "pipeline", "name": "Generation pipeline", "kind": "service", "lane": "runtime",
+     "status": "current", "summary": "Runs the agreed sampler, step count and LoRA set.",
+     "code": ["pipeline/"]}
+  ],
+  "links": [
+    {"id": "decisions-pipeline", "from": "decisions", "to": "pipeline", "transport": "file",
+     "status": "current", "summary": "The pipeline runs what the ledger says is in force.",
+     "sync": "build-time", "waits": "nothing", "on_error": "check fails", "returns": [],
+     "contract": {"name": "Agreed generation settings", "enforcement": "duplicated",
+                  "note": "written in current.json by the ledger and by hand in config.py"},
+     "from_anchors": [{"path": "decisions/current.json", "find": "imagegen.sampler"}],
+     "to_anchors": [{"path": "pipeline/config.py", "find": "SAMPLER ="}]}
+  ],
+  "joins": [
+    {"id": "imagegen-sampler", "name": "Sampler", "link": "decisions-pipeline", "points": [
+      {"path": "decisions/current.json", "side": "decisions", "regex": "\"imagegen\\.sampler\": \"([^\"]+)\""},
+      {"path": "pipeline/config.py", "side": "pipeline", "regex": "(?m)^SAMPLER = \"([^\"]+)\"$"}]},
+    {"id": "imagegen-steps", "name": "Step count", "link": "decisions-pipeline", "points": [
+      {"path": "decisions/current.json", "side": "decisions", "regex": "\"imagegen\\.steps\": (\\d+)"},
+      {"path": "pipeline/config.py", "side": "pipeline", "regex": "(?m)^STEPS = (\\d+)$"}]}
+  ],
+  "sets": [
+    {"id": "imagegen-loras", "name": "LoRA set", "link": "decisions-pipeline", "mode": "equal",
+     "left": {"label": "ledger", "paths": ["decisions/current.json"],
+              "within": "\"imagegen\\.loras\": \\[([^\\]]*)\\]", "regex": "\"([a-z0-9-]+)\""},
+     "right": {"label": "config.py", "paths": ["pipeline/config.py"],
+               "within": "(?m)^LORAS = \\[([^\\]]*)\\]$", "regex": "\"([a-z0-9-]+)\""}}
+  ]
+}

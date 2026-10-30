@@ -8,6 +8,9 @@ Three moments matter, whatever the agent:
 | after an edit | `crossweft hook <agent> post-edit` | for each seam the edited file sits on: the file on the **other** side to re-read, the guard that compares them, and -- if a guard already disagrees -- the disagreement |
 | before "done" | `crossweft hook <agent> stop` | if `crossweft check --incremental` fails, the agent is sent back with the reasons |
 
+The skill also explains `ui:` problems (`crossweft actions`) and `fallback:`
+problems (propose, never decide).
+
 The stop hook checks only what changed since the last commit at which the map
 passed in this work tree (`check --incremental`), so a stop on a large
 repository costs the changed guards, not the whole map; the first stop, an
@@ -243,7 +246,7 @@ GitHub Action (annotates the diff):
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: AnastasiyaW/crossweft@<release commit>  # v0.2.10; a tag can be moved, a commit cannot
+- uses: AnastasiyaW/crossweft@<release commit>  # v0.3.0; a tag can be moved, a commit cannot
 ```
 
 pre-commit:
@@ -251,7 +254,7 @@ pre-commit:
 ```yaml
 repos:
   - repo: https://github.com/AnastasiyaW/crossweft
-    rev: v0.2.10
+    rev: v0.3.0
     hooks:
       - id: crossweft-check
 ```

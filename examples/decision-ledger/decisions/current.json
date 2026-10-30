@@ -1,0 +1,8 @@
+{
+  "imagegen.loras": [
+    "film-grain-v1",
+    "skin-detail-v3"
+  ],
+  "imagegen.sampler": "dpmpp_2m_sde",
+  "imagegen.steps": 28
+}

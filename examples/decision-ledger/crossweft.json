@@ -1,0 +1,6 @@
+{
+  "model_dir": "seams/model",
+  "output_dir": "seams",
+  "language": "en",
+  "validators": {"dir": "validators"}
+}
