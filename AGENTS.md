@@ -33,4 +33,6 @@ the check makes sure it cannot drift from the code.
   `crossweft baseline` (it is for adoption only), or attest a pair with
   `--other-side-unchanged` without re-reading every region, just to make the
   check pass; each needs a concrete reason.
+- If `crossweft` is not on the shell's PATH, run the same commands as
+  `python -m crossweft ...` (`python3` where that is the name).
 <!-- crossweft-agents:end -->

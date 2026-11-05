@@ -31,7 +31,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .harness import project_hooks_run
+from .harness import HarnessError, project_hooks_run
 from .engine import (CONFIG_FILE, Config, ModelError, _normalize_paths, build_impact, evaluate,
                      evaluate_incremental, feedback_line,
                      find_repo_root, load_config, load_model, validate_schema, ImpactError)
@@ -222,10 +222,14 @@ ADVICE = {
            "anchors in {model} (see the crossweft skill).",
     "hazards": "A script line breaks what another program reads (see each rule's safe "
                "form): rewrite it that way. Only a deliberate use gets a finding with its reason.",
+    "signal-code": "The code does not do what the map's signal says: send the trace header "
+                   "on that end, or register the health route in the server.",
     "other": "Fix what the lines above name.",
 }
 DRIFT = {"joins", "sets", "pairs", "joints", "ui"}
-MAP = {"seams", "evidence", "coverage", "provenance", "status", "agents"}
+MAP = {"seams", "evidence", "coverage", "provenance", "status", "agents", "signals"}
+# signal problems whose fix is in the code, not in the map
+SIGNAL_CODE = ("signal:trace:", "signal:health-unserved:")
 
 
 def _advice(cfg: Config, result) -> str:
@@ -235,7 +239,9 @@ def _advice(cfg: Config, result) -> str:
                 f"{model} (or crossweft.json). Then finish.")
     kinds = []
     for problem in result.new:
-        kind = ("drift" if problem.category in DRIFT else "map" if problem.category in MAP
+        kind = ("drift" if problem.category in DRIFT
+                else "signal-code" if problem.key.startswith(SIGNAL_CODE)
+                else "map" if problem.category in MAP
                 else problem.category if problem.category in ADVICE else "other")
         if kind not in kinds:
             kinds.append(kind)
@@ -376,7 +382,12 @@ def run_hook(agent: str | None, event: str | None, stdin: bytes | str,
         root = find_repo_root(start)
     except ModelError:
         return 0   # this repository has not adopted crossweft: nothing to do
-    if from_plugin and project_hooks_run(root, start):
+    try:
+        quiet = from_plugin and project_hooks_run(root, start)
+    except HarnessError as exc:
+        sys.stderr.write(f"crossweft hook: {exc} -- seams were NOT checked\n")
+        return 1
+    if quiet:
         return 0   # the project's own hooks run the same check: do not say it twice
     try:
         cfg = load_config(root)

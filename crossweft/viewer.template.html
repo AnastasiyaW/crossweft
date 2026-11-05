@@ -85,6 +85,7 @@ svg text { fill: var(--ink); }
 .stepdot circle { fill: var(--accent); }
 .stepdot text { fill: #fff; font-size: 10px; font-weight: 700; }
 .warnmark { fill: var(--warn); font-size: 12px; font-weight: 800; }
+.bell { font-size: 11px; cursor: default; }
 h2 { font-size: 16px; margin: 4px 0 6px; }
 h3 { font-size: 13px; margin: 16px 0 6px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .summary { margin: 6px 0 10px; }
@@ -124,6 +125,29 @@ summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .seq .sel .arrow { stroke-width: 2.6; }
 .empty { color: var(--muted); font-style: italic; }
 .warnbox { border: 1px solid var(--warn); background: var(--warn-soft); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.okbox { border: 1px solid var(--ok); border-radius: 8px; padding: 8px 10px; margin: 8px 0; color: var(--ok); }
+.edge.broken { stroke: var(--warn); stroke-width: 3.2; stroke-opacity: 1; }
+.edge.known { stroke: var(--sev-major); stroke-width: 2.4; stroke-opacity: .9; stroke-dasharray: 2 3; }
+.node.broken rect.box { stroke: var(--warn); stroke-width: 2.6; fill: var(--warn-soft); }
+.problem { border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 4px; padding: 6px 8px; margin: 6px 0; font-size: 12.5px; }
+.problem.known { border-left-color: var(--sev-major); background: var(--bg); }
+.problem .where { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--muted); margin-top: 3px; word-break: break-all; }
+#tableWrap { padding: 12px 16px 40px; }
+table.rtable { border-collapse: collapse; width: 100%; font-size: 12.5px; table-layout: fixed; }
+.rtable col.c-route { width: 28%; } .rtable col.c-map { width: 18%; } .rtable col.c-served, .rtable col.c-called { width: 20%; } .rtable col.c-st { width: 14%; }
+.rtable th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--line); padding: 6px 8px; position: sticky; top: 0; background: var(--bg); }
+.rtable td { border-bottom: 1px solid var(--line); padding: 5px 8px; vertical-align: top; }
+.rtable td.mono, .chain .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; overflow-wrap: anywhere; }
+.rtable td { overflow-wrap: anywhere; }
+.rtable tr.bad td { background: var(--warn-soft); }
+.rtable tr.bad td.st { color: var(--warn); font-weight: 650; }
+.rtable tr.known td.st { color: var(--sev-major); }
+.chain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.chain .hop { border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; background: var(--panel); }
+.chain .hop .k { color: var(--muted); font-size: 11px; }
+.chain .arrow { color: var(--muted); }
+.chain .hop.cut { border-color: var(--warn); color: var(--warn); background: var(--warn-soft); font-weight: 600; }
+.chain .hop.ok { border-color: var(--ok); color: var(--ok); }
 </style>
 </head>
 <body>
@@ -142,7 +166,7 @@ summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
   <div class="group"><span class="label" id="zoomText"></span><button id="zoomOut">−</button><button id="zoomFit"><span id="zoomLabel"></span></button><button id="zoomIn">+</button></div>
 </nav>
 <main>
-  <div id="canvasWrap"><svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img"></svg></div>
+  <div id="canvasWrap"><svg id="canvas" xmlns="http://www.w3.org/2000/svg" role="img"></svg><div id="tableWrap" hidden></div></div>
   <aside id="panel"></aside>
 </main>
 <script>
@@ -180,6 +204,26 @@ const flowsByLink = new Map();
 for (const f of MAP.flows) f.steps.forEach((s, i) => { if (!flowsByLink.has(s.link)) flowsByLink.set(s.link, []); flowsByLink.get(s.link).push([f, i]); });
 const findingsByRef = new Map();
 for (const f of MAP.findings) for (const r of (f.where || [])) { if (!findingsByRef.has(r)) findingsByRef.set(r, []); findingsByRef.get(r).push(f); }
+// `crossweft report` adds what the check found; `render` never does (its page is the model alone)
+const R = MAP.report || null;
+const RT = R ? R.i18n : {};
+const problemsByRef = new Map(), problemByKey = new Map();
+if (R) for (const p of R.problems) { problemByKey.set(p.key, p); for (const r of p.refs) { if (!problemsByRef.has(r)) problemsByRef.set(r, []); problemsByRef.get(r).push(p); } }
+const problemsOf = ref => problemsByRef.get(ref) || [];
+const failingOf = ref => problemsOf(ref).filter(p => !p.known);
+// signals (meta.signals): an entry with an alarm gets a bell; `skip` is a declared absence
+const belled = e => !!(e.signals && !e.signals.skip);
+function signalText(sig) {
+  if (!sig) return "";
+  if (sig.skip) return fmt(U.sig_skip, { v: sig.skip });
+  const parts = [];
+  if (sig.health) parts.push(fmt(U.sig_health, { v: [].concat(sig.health).join(", ") }));
+  if (sig.heartbeat) parts.push(fmt(U.sig_heartbeat, { v: sig.heartbeat.every }));
+  if (sig.red) parts.push(U.sig_red);
+  if (sig.queue) parts.push(fmt(U.sig_queue, sig.queue));
+  if (sig.probe) parts.push(fmt(U.sig_probe, { v: sig.probe.every, ...sig.probe }));
+  return h("div", {}, ...parts.map(t => h("div", {}, "\u{1F514} " + t)));
+}
 
 function ancestors(id) { const out = []; let cur = id; const seen = new Set(); while (cur && blocks.has(cur) && !seen.has(cur)) { out.push(cur); seen.add(cur); cur = blocks.get(cur).parent; } return out; }
 function rootOf(id) { const a = ancestors(id); return a[a.length - 1]; }
@@ -189,9 +233,11 @@ function openFindings(ref) { return (findingsByRef.get(ref) || []).filter(f => f
 
 // ------------------------------------------------------------------- state
 const PLANE_LIST = (MAP.meta.planes || []).map(p => [p.id, p.name]);
-const state = { tab: "map", plane: PLANE_LIST.length ? PLANE_LIST[0][0] : "all", statuses: new Set(["current"]), expanded: new Set(), sel: null, step: null, search: "" };
+const state = { tab: "map", plane: PLANE_LIST.length ? PLANE_LIST[0][0] : "all", statuses: new Set(["current"]), expanded: new Set(), sel: null, step: null, search: "", brokenOnly: false };
 const STATUS_ORDER = ["current", "out-of-scope", "planned", "test-only", "legacy"];
-const TABS = [["map", U.tab_map], ["flows", U.tab_flows], ["data", U.tab_data], ["findings", U.tab_findings]];
+const TABS = [["map", U.tab_map], ["flows", U.tab_flows], ["data", U.tab_data], ["findings", U.tab_findings],
+  ...(R ? [["routes", RT.tab_routes], ["actions", RT.tab_actions]] : [])];
+const TABLE_TABS = new Set(["routes", "actions"]);
 const PLANES = PLANE_LIST.length ? [...PLANE_LIST, ["all", U.plane_all]] : [];
 
 function transportFamily(t) {
@@ -356,8 +402,15 @@ function involvement() {
 // ------------------------------------------------------------------- render
 let visibleEdgeKeys = new Set();
 function renderCanvas() {
-  computeLayout();
+  const tableWrap = document.getElementById("tableWrap");
   const svg = document.getElementById("canvas");
+  if (R && TABLE_TABS.has(state.tab)) {
+    svg.style.display = "none"; tableWrap.hidden = false; tableWrap.innerHTML = "";
+    tableWrap.append(state.tab === "routes" ? routesView() : actionsView());
+    return;
+  }
+  svg.style.display = ""; tableWrap.hidden = true;
+  computeLayout();
   svg.innerHTML = "";
   const wrap = document.getElementById("canvasWrap");
   const fit = Math.max(0.72, Math.min(1, (wrap.clientWidth - 8) / layout.width));
@@ -402,14 +455,23 @@ function renderCanvas() {
     const hot = e.links.some(l => inv.links.has(l.id));
     const allLegacy = e.links.every(l => l.status !== "current");
     const p = edgePath(e);
-    const cls = "edge" + (allLegacy ? " dash" : "") + (hot ? " hot" : "") + (active && !hot ? " dim" : "");
+    const broken = e.links.some(l => failingOf("link:" + l.id).length);
+    const known = !broken && e.links.some(l => problemsOf("link:" + l.id).length);
+    const cls = "edge" + (allLegacy ? " dash" : "") + (hot ? " hot" : "") + (active && !hot ? " dim" : "")
+      + (broken ? " broken" : known ? " known" : "");
     const path = el("path", { class: cls, d: p.d, stroke: color, "marker-end": `url(#arr-${fam})` }, edgeLayer);
     const hit = el("path", { class: "edge-hit", d: p.d }, edgeLayer);
     const title = el("title", {}, hit);
-    title.textContent = e.links.map(l => `${shortName(l.from)} → ${shortName(l.to)}: ${l.label || T.transport[l.transport] || l.transport} — ${l.summary}`).join("\n");
+    title.textContent = e.links.map(l => `${shortName(l.from)} → ${shortName(l.to)}: ${l.label || T.transport[l.transport] || l.transport} — ${l.summary}`
+      + failingOf("link:" + l.id).map(p => "\n✕ " + p.message).join("")).join("\n");
     hit.addEventListener("click", ev => { ev.stopPropagation(); select({ type: "links", ids: e.links.map(l => l.id) }); });
     if (e.links.some(l => openFindings("link:" + l.id).length)) {
       const w = el("text", { class: "warnmark", x: p.mx - 4, y: p.my - 6 }, dotLayer); w.textContent = "!";
+    }
+    if (e.links.some(belled)) {
+      const marked = e.links.some(l => openFindings("link:" + l.id).length);
+      const b = el("text", { class: "bell", x: p.mx + (marked ? 6 : -6), y: p.my - 6 }, dotLayer); b.textContent = "\u{1F514}";
+      el("title", {}, b).textContent = U.sig_bell;
     }
     const nums = e.links.flatMap(l => inv.steps.get(l.id) || []);
     if (nums.length) {
@@ -428,6 +490,7 @@ function renderCanvas() {
     if (active && !hotNodes.has(n.id)) classes.push("dim");
     const warn = subtree(n.id).some(id => openFindings("block:" + id).length);
     if (warn) classes.push("warn");
+    if (subtree(n.id).some(id => failingOf("block:" + id).length)) classes.push("broken");
     const g = el("g", { class: classes.join(" "), transform: `translate(${n.x},${n.y})` }, svg);
     el("rect", { class: "box", width: n.w, height: n.h, rx: 8 }, g);
     const name = el("text", { class: "name", x: 10, y: 20 }, g); name.textContent = truncate(b.short || b.name, n.kids ? 22 : 28);
@@ -435,6 +498,7 @@ function renderCanvas() {
     sub.textContent = truncate((T.kind[b.kind] || b.kind) + (b.status !== "current" ? " · " + T.status[b.status] : ""), 30);
     const tt = el("title", {}, g); tt.textContent = b.name + "\n" + b.summary;
     if (warn) { const w = el("text", { class: "warnmark", x: n.w - 12, y: 16 }, g); w.textContent = "!"; }
+    if (belled(b)) { const bl = el("text", { class: "bell", x: n.w - (warn ? 30 : 18), y: 16 }, g); bl.textContent = "\u{1F514}"; }
     if (n.kids) {
       const tg = el("g", { class: "toggle", transform: `translate(${n.w - 40},${n.h - 20})` }, g);
       el("rect", { width: 34, height: 15, rx: 7 }, tg);
@@ -491,10 +555,11 @@ function panelBlock(id) {
     h("h2", {}, b.name),
     h("div", { cls: "chips" }, statusChip(b.status), h("span", { cls: "chip" }, T.kind[b.kind] || b.kind), h("span", { cls: "chip" }, laneById.get(b.lane).name), b.evidence ? h("span", { cls: "chip" }, U.evidence + ": " + T.evidence[b.evidence]) : null),
     h("div", { cls: "summary" }, b.summary),
+    ...problemList(subtree(id).flatMap(c => problemsOf("block:" + c))),
     kv([[U.runs, b.runs || ""], [U.owner, b.owner || ""], [U.part_of, b.parent ? blockLink(b.parent) : ""],
         [U.code, (b.code || []).length ? h("div", { cls: "mono" }, (b.code || []).join("\n")) : ""],
         [U.docs, (b.docs || []).length ? h("div", { cls: "mono" }, (b.docs || []).join("\n")) : ""],
-        [U.requirements, (b.requirements || []).join(", ")]]),
+        [U.requirements, (b.requirements || []).join(", ")], [U.signals, signalText(b.signals)]]),
   ];
   if (b.notes) nodes.push(h("div", { cls: "d" }, b.notes));
   const fs = subtree(id).flatMap(x => openFindings("block:" + x));
@@ -532,8 +597,10 @@ function panelLinks(ids) {
           [U.waits, l.waits || ""], [U.on_error, l.on_error || ""], [U.envs, (l.envs || []).join(", ")], [U.evidence, l.evidence ? T.evidence[l.evidence] : ""],
           [U.sends, (l.carries || []).length ? h("span", { cls: "chips" }, ...(l.carries || []).map(dataChip)) : ""],
           [U.gets, (l.returns || []).length ? h("span", { cls: "chips" }, ...(l.returns || []).map(dataChip)) : ""],
-          ...Object.entries(l.identifiers || {}).map(([k, v]) => [k, h("div", { cls: "mono" }, v.join("\n"))])]),
+          ...Object.entries(l.identifiers || {}).map(([k, v]) => [k, h("div", { cls: "mono" }, v.join("\n"))]),
+          [U.signals, signalText(l.signals)]]),
       l.notes ? h("div", { cls: "d" }, l.notes) : null,
+      ...problemList(problemsOf("link:" + l.id)),
       ...openFindings("link:" + l.id).map(findingChip),
       ...(flowsByLink.get(l.id) || []).map(([f, i]) => h("div", { cls: "d" }, U.flow_step, h("span", { cls: "blocklink", onclick: () => { state.tab = "flows"; state.step = i; select({ type: "flow", id: f.id }, true); } }, fmt(U.flow_step_n, { name: f.name, n: i + 1 })))),
       anchorList([...(l.from_anchors || []), ...(l.to_anchors || []), ...((l.contract && l.contract.defined_in) || [])])));
@@ -578,7 +645,8 @@ function seqDiagram(flow) {
 function panelFlow(id) {
   const f = flows.get(id);
   const nodes = [h("h2", {}, f.name), h("div", { cls: "chips" }, statusChip(f.status), f.evidence ? h("span", { cls: "chip" }, U.evidence + ": " + T.evidence[f.evidence]) : null, ...(f.requirements || []).map(r => h("span", { cls: "chip" }, r))),
-    h("div", { cls: "summary" }, f.summary), kv([[U.trigger, f.trigger || ""], [U.result, f.result || ""]]),
+    h("div", { cls: "summary" }, f.summary), ...problemList(problemsOf("flow:" + id)),
+    kv([[U.trigger, f.trigger || ""], [U.result, f.result || ""], [U.signals, signalText(f.signals)]]),
     h("div", { cls: "seqwrap" }, seqDiagram(f)), h("h3", {}, U.steps)];
   f.steps.forEach((s, i) => {
     const l = links.get(s.link);
@@ -648,10 +716,74 @@ function legend() {
   return box;
 }
 
+// ------------------------------------------------------------------ report
+function where(p) { return p.path ? p.path + (p.line ? ":" + p.line : "") : ""; }
+function problemList(list) {
+  const seen = new Set();
+  return list.filter(p => !seen.has(p.key) && seen.add(p.key)).map(p =>
+    h("div", { cls: "problem" + (p.known ? " known" : "") }, p.message,
+      p.path ? h("div", { cls: "where" }, where(p)) : null,
+      p.known ? h("div", { cls: "where" }, fmt(RT.problem_known, { id: p.finding })) : null));
+}
+function placesCell(list) {
+  const shown = list.slice(0, 3);
+  return h("td", { cls: "mono" }, ...shown.map((s, i) => [i ? h("br") : null, s]), list.length > 3 ? h("div", { cls: "d" }, "+" + (list.length - 3)) : null);
+}
+function routeBad(r) { return r.problems.some(k => !(problemByKey.get(k) || {}).known); }
+function routesView() {
+  if (!R.routes.scanned) return h("div", { cls: "empty" }, RT.routes_none);
+  const rows = R.routes.rows.filter(r => !state.brokenOnly || r.problems.length);
+  return h("table", { cls: "rtable" },
+    h("colgroup", {}, ...["c-route", "c-map", "c-served", "c-called", "c-st"].map(c => h("col", { cls: c }))),
+    h("thead", {}, h("tr", {}, h("th", {}, RT.route), h("th", {}, RT.on_map), h("th", {}, RT.served), h("th", {}, RT.called), h("th", {}, RT.row_status))),
+    h("tbody", {}, ...rows.map(r => h("tr", { cls: routeBad(r) ? "bad" : r.problems.length ? "known" : "" },
+      h("td", { cls: "mono" }, (r.method || "—") + " " + r.path),
+      h("td", {}, ...r.links.map((l, i) => [i ? ", " : null, h("span", { cls: "blocklink", title: T.status[l.status] || l.status, onclick: () => { state.tab = "map"; select({ type: "links", ids: [l.id] }); } }, l.id)])),
+      placesCell(r.served), placesCell(r.called),
+      h("td", { cls: "st", title: r.problems.map(k => (problemByKey.get(k) || {}).message || k).join("\n") }, RT["st_" + r.status] || r.status)))));
+}
+function chainView(c) {
+  const bad = c.status === "dead" || c.status === "unrouted";
+  const parts = [h("span", { cls: "hop" + (bad ? " cut" : c.status === "ok" ? " ok" : "") }, h("span", { cls: "mono" }, c.control + (c.dynamic ? "*" : "")), " ", h("span", { cls: "k" }, c.path + ":" + c.line))];
+  for (const s of c.steps) {
+    parts.push(h("span", { cls: "arrow" }, "→"));
+    parts.push(h("span", { cls: "hop", title: s.path ? s.path + ":" + s.line : "" }, h("span", { cls: "k" }, s.hop + " "), h("span", { cls: "mono" }, s.key + (s.value ? " → " + s.value : ""))));
+  }
+  parts.push(h("span", { cls: "arrow" }, "→"));
+  parts.push(h("span", { cls: "hop" + (bad ? " cut" : c.status === "ok" ? " ok" : ""), title: c.detail || "" }, bad ? "✕ " + (RT["st_" + c.status] || c.status) : "✓ " + (RT["st_" + c.status] || c.status)));
+  return [h("div", { cls: "chain" }, ...parts), bad && c.detail ? h("div", { cls: "problem" }, c.detail) : null];
+}
+function actionsView() {
+  if (!R.actions.length) return h("div", { cls: "empty" }, RT.actions_none);
+  const nodes = [];
+  for (const a of R.actions) {
+    const shown = a.controls.filter(c => !state.brokenOnly || c.status === "dead" || c.status === "unrouted");
+    nodes.push(h("h3", {}, a.name, " ", h("span", { cls: "chip" }, "ui:" + a.id)), ...shown.flatMap(chainView));
+  }
+  return h("div", {}, ...nodes);
+}
+function reportIntro() {
+  const failing = R.problems.filter(p => !p.known);
+  const unplaced = R.problems.filter(p => !p.refs.length);
+  return [h("div", { cls: R.ok ? "okbox" : "warnbox" }, R.ok ? RT.passed : fmt(RT.checked_at, { when: R.generated, new: R.new, known: R.known })),
+    failing.length ? h("h3", {}, RT.problems + " (" + failing.length + ")") : null,
+    ...problemList(failing.filter(p => p.refs.length)),
+    unplaced.length ? h("h3", {}, RT.unplaced + " (" + unplaced.length + ")") : null,
+    ...problemList(unplaced)];
+}
+function tablePanel() {
+  const isRoutes = state.tab === "routes";
+  const items = isRoutes ? R.routes.rows : R.actions.flatMap(a => a.controls);
+  const bad = isRoutes ? items.filter(routeBad).length : items.filter(c => c.status === "dead" || c.status === "unrouted").length;
+  return [h("h2", {}, isRoutes ? RT.tab_routes : RT.tab_actions), h("div", { cls: "d" }, isRoutes ? RT.routes_d : RT.actions_d),
+    h("div", { cls: "chips" }, h("span", { cls: "chip" }, fmt(RT.count_rows, { n: items.length, bad }))),
+    h("p", {}, h("button", { cls: state.brokenOnly ? "on" : "", onclick: () => { state.brokenOnly = !state.brokenOnly; render(); } }, RT.filter_broken))];
+}
+
 function panelIntro() {
   const open = MAP.findings.filter(f => f.status !== "closed");
   const bySev = sev => open.filter(f => f.severity === sev).length;
-  return [h("h2", {}, U.how_to),
+  return [...(R ? reportIntro() : []), h("h2", {}, U.how_to),
     h("div", { cls: "summary" }, U.how_to_d),
     h("div", { cls: "chips" }, h("span", { cls: "chip" }, fmt(U.n_blocks, { n: MAP.blocks.length })), h("span", { cls: "chip" }, fmt(U.n_links, { n: MAP.links.length })), h("span", { cls: "chip" }, fmt(U.n_flows, { n: MAP.flows.length })), h("span", { cls: "chip" }, fmt(U.n_data, { n: MAP.data.length }))),
     open.length ? h("div", { cls: "warnbox" }, fmt(U.open_findings, { open: open.length, blocker: bySev("blocker"), major: bySev("major") }), h("span", { cls: "blocklink", onclick: () => { state.tab = "findings"; render(); } }, U.open_list)) : null,
@@ -660,6 +792,7 @@ function panelIntro() {
 }
 
 function listPanel() {
+  if (R && TABLE_TABS.has(state.tab)) return tablePanel();
   if (state.tab === "flows") {
     return [h("h2", {}, U.tab_flows), h("div", { cls: "d" }, U.flows_d),
       ...MAP.flows.map(f => h("div", { cls: "item click", onclick: () => select({ type: "flow", id: f.id }) }, h("div", { cls: "t" }, f.name, f.status !== "current" ? h("span", {}, " ", statusChip(f.status)) : null), h("div", { cls: "d" }, f.summary)))];

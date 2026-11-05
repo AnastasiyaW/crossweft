@@ -280,7 +280,66 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("self-test", help="run the engine and runner self-tests (planted fixtures)",
         description="Run the engine and validator-runner self-tests on planted fixtures.")
+
+    report = sub.add_parser("report", help="write the map with what the check found on it (HTML)",
+        description="Run the full check and write the map page with every problem placed on its "
+                    "link or block, a routes table (on the map / served / called) and the button "
+                    "chains. Not compared by `render --check`: it shows the code as it is now. "
+                    "Exit code as `check`.",
+        epilog="Example: crossweft report --out build/crossweft-report.html")
+    report.add_argument("--out", help="file to write (default: <output_dir>/report.html)")
+    report.add_argument("--json", action="store_true", help="print the report data instead")
+
+    sig = sub.add_parser("signals", help="print the alarm rules the map implies (JSON catalog)",
+        description="Turn meta.signals and the signals of blocks, links and flows into a catalog "
+                    "of alarm rules for the ops alert router: health checks, heartbeats, "
+                    "request/error/latency per HTTP link, queue depth and age, dead letters, "
+                    "synthetic probes per flow and the always-firing watchdog. Exit 1 when a "
+                    "current entry lacks a signal it needs, 2 when the map has no meta.signals.",
+        epilog="Example: crossweft signals --out build/signals.json")
+    sig.add_argument("--out", help="file to write (default: print to stdout)")
+
+    sub.add_parser("doctor", help="show which installed copy runs and whether another shadows it",
+        description="Print the version, the package path and the interpreter, and list every "
+                    "crossweft installed on this interpreter's path. Exit 1 when copies of "
+                    "different versions are installed side by side.",
+        epilog="Example: python -m crossweft doctor")
     return parser
+
+
+def _doctor() -> int:
+    """Two installs (site-packages and the user site) shadow each other silently:
+    `--version` names only the copy that won. List them all."""
+    import importlib.metadata
+
+    running = Path(__file__).resolve().parent
+    print(f"crossweft {__version__}")
+    print(f"running: {running}")
+    print(f"python:  {sys.executable}")
+    seen: list[tuple[str, Path]] = []
+    for dist in importlib.metadata.distributions():
+        if (dist.metadata["Name"] or "").lower() != "crossweft":
+            continue
+        location = Path(str(dist.locate_file(""))).resolve()
+        # one location may hold leftover metadata of several versions (an upgrade
+        # interrupted by a locked file): each is listed, it is part of the mess
+        if (dist.version, location) not in seen:
+            seen.append((dist.version, location))
+    if not seen:
+        print("installs: none found by package metadata (run from a source tree?)")
+        return 0
+    print("installs (first on the path is the one `import crossweft` loads):")
+    for version, location in seen:
+        mark = "  <- running" if running.parent == location else ""
+        print(f"  {version:<10} {location}{mark}")
+    versions = {version for version, _ in seen} | {__version__}
+    if len(versions) > 1:
+        print(f"WARNING: {len(seen)} installs of different versions ({', '.join(sorted(versions))}); "
+              "the interpreter and the working directory decide which one runs. "
+              "Remove every copy (python -m pip uninstall -y crossweft, repeated until pip finds "
+              "none), then install once.")
+        return 1
+    return 0
 
 
 def _hook_stdin() -> bytes | str:
@@ -310,6 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     if command is None:
         parser.print_help()
         return 2
+    if command == "doctor":
+        return _doctor()
     if command == "self-test":
         code = engine.self_test() or runner._run_self_test()
         plugins = engine.run_joint_self_tests(Path(args.root).resolve() if args.root else None)
@@ -358,6 +419,12 @@ def main(argv: list[str] | None = None) -> int:
                                 incremental=args.incremental)
     if command == "render":
         return engine.run_render(cfg, check_only=args.check)
+    if command == "report":
+        from . import report as report_module
+        return report_module.run_report(cfg, args.out, args.json)
+    if command == "signals":
+        from . import signals as signals_module
+        return signals_module.run_signals(cfg, args.out)
     if command == "show":
         return engine.run_show(cfg, args.id)
     if command == "actions":

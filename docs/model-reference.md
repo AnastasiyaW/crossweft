@@ -44,7 +44,8 @@ At the repository root; it also marks the root. Every key is optional.
 | `verified_on`, `verified_against` | no | date and commit the map was last reviewed at; `check` then reports which blocks' code changed since |
 | `route_scan` | no | see [Routes](#routes) |
 | `joint_kinds` | no | the [joint kinds](#joint-kind-plugins) this model must carry, e.g. `["handles", "pipes"]` |
-| `coverage` | no | `{"roots": ["src/*"], "ignore": [{"path", "reason"}]}` -- every directory matched by `roots` must be the code of some block (hidden directories, `.name`, and `__pycache__` are skipped; anything else not on the map goes in `ignore` with a reason) |
+| `signals` | no | `{"notify", "watchdog", "trace_header"?, ...}` -- every link, running block and flow must carry an alarm; see [signals.md](signals.md) |
+| `coverage` | no | `{"roots": ["src/*"], "ignore": [{"path", "reason"}]}` -- every directory matched by `roots` must be the code of some block (hidden directories, `.name`, `__pycache__`, and a directory git ignores that holds no tracked file -- `logs/` a local run writes -- are skipped; anything else not on the map goes in `ignore` with a reason) |
 
 ## `blocks`
 
@@ -61,6 +62,7 @@ A program, service, component, library, store, external service, artifact or too
 | `anchors` | no | claims about the code, see [Anchors](#anchors) |
 | `parent` | no | a containing block |
 | `route_server` | no | `true` for the block whose routes `route_scan` reads |
+| `signals` | no | `health`, `heartbeat`, `audience`, ... or `skip` -- see [signals.md](signals.md) |
 | `short`, `owner`, `runs`, `docs`, `evidence`, `waits_for`, `notes`, `requirements` | no | documentation fields |
 
 ## `links`
@@ -70,12 +72,13 @@ Who passes what to whom.
 | Field | Required | Meaning |
 |---|---|---|
 | `id`, `from`, `to`, `summary` | yes | `from`/`to` are block ids |
-| `transport` | yes | `named-pipe https http-loopback process-launch file registry scm in-process generated-code build-input embedded git tunnel smtp sql object-store cache webhook oauth manual ui mtls dpapi docker os-api ssh` |
+| `transport` | yes | `named-pipe https http-loopback process-launch file registry scm in-process generated-code build-input embedded git tunnel smtp sql object-store cache webhook oauth manual ui mtls dpapi docker os-api ssh queue` |
 | `status` | yes | as for blocks; a current link may not touch a legacy/planned block |
 | `contract` | when both ends are our code | `{"name", "enforcement", "defined_in"?, "note"?}` -- see below |
 | `from_anchors`, `to_anchors` | when that end has code | where each side implements the link |
 | `identifiers` | no | `{"route": ["GET /v1/x"], "header": [...], "env": [...], "pipe": [...], ...}` |
 | `carries`, `returns` | no | data ids this link carries (`returns`: back to the caller) |
+| `signals` | no | `red`, `queue` or `skip` -- see [signals.md](signals.md) |
 | `gone` | no | legacy links only: `{"status": 410, "replaced_by"?: "<current link id>", "note"?}` -- the retired routes in `identifiers.route` are still registered on purpose and answer `status` (see [Routes](#routes)) |
 | `label`, `sync`, `waits`, `on_error`, `evidence`, `envs`, `notes`, `requirements` | no | documentation fields |
 
@@ -202,6 +205,18 @@ fingerprint of every region (trailing whitespace and line endings ignored) in
 the lock file. Any later change to any region fails the check until someone
 re-reads the others and attests again. `crossweft attest --all` attests every
 changed pair; `--prune` drops lock entries for removed pairs.
+
+`"compare": "tokens"` on a pair ignores layout: whitespace between tokens is
+dropped (one space kept between two words and between two operator characters,
+so `i + ++j` is not `i++ + j`), so re-indenting, re-wrapping or a formatter run
+does not ask for a new attestation, while any changed token, comment word or
+string character still does. A line with a `//` or `#` comment keeps its line
+break, so pulling the next statement into the comment is a change. Regions in
+languages where indentation or line breaks are syntax (`.py`, `.yaml`, `.toml`,
+Makefiles and the like) cannot use tokens mode: that is a schema error. Whitespace
+inside string literals counts as layout too, so keep the default
+`"compare": "text"` for a pair whose strings differ only in spacing. Switching the
+mode recomputes every fingerprint: attest the pair once after the switch.
 
 ### `ui_actions` -- every control reaches its handler
 
@@ -400,6 +415,7 @@ rule: data may leave a block over a link only if the block created it (`origin`,
 
 `{"id", "name", "status", "summary", "steps": [{"link", "action", "reply"?, "waits"?, "then"?}]}`
 -- rendered as sequence diagrams; a current flow may not use a non-current link.
+Optional `signals` (`probe` or `skip`, see [signals.md](signals.md)).
 
 ## `findings`
 

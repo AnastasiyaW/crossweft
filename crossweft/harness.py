@@ -62,6 +62,23 @@ CLAUDE_FILES = (("CLAUDE.md", "@AGENTS.md"), (".claude/CLAUDE.md", "@../AGENTS.m
 # in the shell Claude Code uses; crossweft answers in well under a second, and the
 # plugin's shortest hook timeout is 30s.
 LAUNCHER_PROBE_TIMEOUT = 10
+# A loaded machine can take longer to start a shell: CROSSWEFT_LAUNCHER_PROBE_TIMEOUT
+# raises the limit, capped below the plugin's 30s hook timeout so the probe never
+# eats the whole hook. A probe that runs out only makes the plugin check by itself.
+LAUNCHER_PROBE_TIMEOUT_MAX = 25
+
+
+def launcher_probe_timeout() -> float:
+    raw = os.environ.get("CROSSWEFT_LAUNCHER_PROBE_TIMEOUT")
+    if raw is None or not raw.strip():
+        return LAUNCHER_PROBE_TIMEOUT
+    try:
+        value = float(raw)
+    except ValueError:
+        raise HarnessError(f"CROSSWEFT_LAUNCHER_PROBE_TIMEOUT={raw!r}: must be a number of seconds") from None
+    if value <= 0:
+        raise HarnessError(f"CROSSWEFT_LAUNCHER_PROBE_TIMEOUT={raw!r}: must be above 0")
+    return min(value, LAUNCHER_PROBE_TIMEOUT_MAX)
 VERSION_ANSWER = re.compile(r"^crossweft \d", re.MULTILINE)   # argparse's `--version` line
 
 
@@ -103,6 +120,8 @@ the check makes sure it cannot drift from the code.
   `crossweft baseline` (it is for adoption only), or attest a pair with
   `--other-side-unchanged` without re-reading every region, just to make the
   check pass; each needs a concrete reason.
+- If `crossweft` is not on the shell's PATH, run the same commands as
+  `python -m crossweft ...` (`python3` where that is the name).
 {BLOCK_END}
 """
 
@@ -340,7 +359,7 @@ def _answers_as_crossweft(command: str, root: Path, cwd: Path) -> bool:
     try:
         probe = subprocess.run([shell, "-c", f"{command} --version"], cwd=cwd, env=env,
                                stdin=subprocess.DEVNULL, capture_output=True,
-                               timeout=LAUNCHER_PROBE_TIMEOUT)
+                               timeout=launcher_probe_timeout())
     except (OSError, subprocess.TimeoutExpired):
         return False
     return probe.returncode == 0 and bool(

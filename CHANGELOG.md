@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.4.0 (2026-11-05)
+
+- Signals (`meta.signals`, opt-in): every current HTTP link needs
+  `signals.red`, every `queue` link (new transport) `signals.queue` with its
+  dead-letter queue, every running service or site a health check or a
+  heartbeat, every flow a synthetic probe -- or `skip` with the reason; `check`
+  fails otherwise (`signal:missing:...`). A heartbeat names the code that sends
+  it, a `GET /path` health check must be a registered route, and with
+  `trace_header` both ends of an HTTP link must mention it. `crossweft signals`
+  prints the alarm catalog (thresholds from the ops alert plan, the
+  always-firing watchdog included); the map draws a bell on watched blocks and
+  links. See docs/signals.md. Re-render once after upgrading.
+- `crossweft report`: the map page with what the check found on it. Links and
+  blocks with a failing problem are red and a click names the file and line; a
+  Routes tab lists every route from the map, the server and the client with the
+  check's verdict per row; a Buttons tab draws each control's chain (control ->
+  table -> handler -> route) with the break in red. `render` output carries no
+  check state; the viewer template changed, so run `crossweft render` once after
+  upgrading.
+- A join that disagrees is reported at the side that was edited (the
+  `--changed` files, or the work tree's changes against HEAD), and the message
+  names it: "edited side: web@web/api.ts:1; the other side (...) still holds the
+  old value". When the edited side cannot be told, a lone drifted copy among
+  agreeing sites is named as such, and a tie says the location is only one of
+  the sites and lists all of them. Before, the location was always the second
+  differing value, often the file nobody touched.
+- `pairs` take `"compare": "tokens"`: the fingerprint ignores layout, so
+  re-indenting, re-wrapping or a formatter run no longer asks for a new
+  attestation, while any changed token, comment word or string character still
+  does. A line with a `//` or `#` comment keeps its line break (pulling the next
+  statement into the comment is a change), two operator characters keep their
+  space, and regions in `.py`, `.yaml`, `.toml`, Makefiles and other languages
+  where layout is syntax are refused. Switching the mode asks for one
+  attestation and says why.
+- `CROSSWEFT_LAUNCHER_PROBE_TIMEOUT` raises the 10-second limit the plugin gives
+  the project's launcher to answer `--version` (at most 25 s); a value that is
+  not a positive number is an error, not a silent default: the plugin hook
+  reports it in one line and checks nothing.
+- The map page escapes every `<` in model text: a note containing
+  `<!--<script` used to blank the whole viewer and report.
+- The AGENTS.md block names `python -m crossweft` for a shell where the
+  `crossweft` launcher is not on PATH (found in a live Codex CLI run).
+
+- Coverage skips a directory that git ignores and that holds no tracked file
+  (`logs/` written by a local run): it is not source, and a `coverage.ignore`
+  entry for it would be stale in a clean checkout. Outside a git work tree
+  every directory is reported as before.
+- `crossweft doctor`: the running copy, the interpreter, and every installed
+  copy on the path; exit 1 when copies of different versions shadow each other.
+
 ## 0.3.0 (2026-10-30)
 
 - `fallbacks`: every place where the code carries on after a failure -- an error caught

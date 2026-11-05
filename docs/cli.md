@@ -268,3 +268,62 @@ self-tests of any joint plugins in the repository.
 ```bash
 crossweft self-test
 ```
+
+## `crossweft report`
+
+Runs the full check and writes the map page with what it found:
+
+- every problem is placed on its link or block: a link with a failing problem is
+  red, a block holding one is red, and a click lists what is broken and in which
+  file and line (problems a finding excuses are drawn dashed);
+- **Routes**: one row per route from the three sources the route checks read --
+  declared on the map, registered by the server, called by the client -- with
+  the check's verdict for the row (served but not on the map, on the map but not
+  served, called but not on the map, a retired route still called);
+- **Buttons**: every `ui_actions` control and the hops it passes (control ->
+  table -> handler -> route), the break in red.
+
+The verdicts are the check's own problems, so the page never disagrees with
+`crossweft check`. `render` is not touched: its pages depend on the model alone
+and `render --check` compares them; the report shows the code as it is now, so
+do not commit it.
+
+| Flag | Meaning |
+|---|---|
+| `--out PATH` | file to write (default `<output_dir>/report.html`) |
+| `--json` | print the report data instead of writing the page |
+
+Exit code as `check`: 0 passes, 1 fails, 2 could not run.
+
+```bash
+crossweft report --out build/crossweft-report.html
+```
+
+## `crossweft signals`
+
+Turns `meta.signals` and the `signals` of blocks, links and flows into a JSON
+catalog of alarm rules for the alert router: health checks, heartbeats,
+request/error/latency per HTTP link, queue depth and age, dead letters, a
+synthetic probe per flow and the always-firing watchdog. Exit 0 when complete,
+1 when a current entry lacks a signal it needs (the same list `check` fails
+on), 2 when the map has no `meta.signals`. Details: [signals.md](signals.md).
+
+| Flag | Meaning |
+|---|---|
+| `--out PATH` | file to write (default: print to stdout) |
+
+```bash
+crossweft signals --out build/signals.json
+```
+
+## `crossweft doctor`
+
+Prints the version, the path of the package that runs and the interpreter, and
+lists every crossweft installed on that interpreter's path. Exits 1 when copies
+of different versions are installed side by side (for example one in
+site-packages and an older one in the user site): then the interpreter and the
+working directory decide which one runs, and `--version` shows only the winner.
+
+```bash
+python -m crossweft doctor
+```

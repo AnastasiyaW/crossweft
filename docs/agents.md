@@ -107,7 +107,9 @@ directory that holds `crossweft.json` (Claude Code reads
 `agent.command`, and `<agent.command> --version`, run in the hook shell (Git
 Bash on Windows, `sh` elsewhere), answers `crossweft <version>` within 10
 seconds. Anything else -- no `crossweft` on `PATH`, a launcher that is `echo`,
-no shell to ask -- and the plugin does the checking itself.
+no shell to ask -- and the plugin does the checking itself. On a slow or
+loaded machine, `CROSSWEFT_LAUNCHER_PROBE_TIMEOUT=<seconds>` raises the 10-second
+limit (at most 25, below the plugin's 30-second hook timeout).
 
 ## OpenAI Codex (supported skill plugin)
 
@@ -129,11 +131,23 @@ third-party command-hook configuration. Install the Crossweft CLI using the
 `crossweft agents` still writes
 `AGENTS.md`, so Codex receives the repository-level working rules.
 
+End-to-end run (2026-11-05, Codex CLI 0.166, Windows, `codex exec` in a
+`crossweft init --example` repository, task "change API_VERSION in
+crossweft-example/api/version.py"): from the AGENTS.md block alone Codex ran
+`crossweft impact`, was told `crossweft-example/web/version.ts` holds the other
+side, changed both files and finished on `crossweft check` `RESULT: PASS`. The
+one friction was a `crossweft` launcher missing from the shell's PATH (a
+`pip install --user` script directory); the block now names `python -m crossweft`
+as the fallback.
+
 ## Other agents (experimental)
 
 The adapters below follow each agent's published hook reference as of
 2026-09. They are covered by unit tests of the JSON shapes, not yet by
-end-to-end runs in each agent -- reports and fixes are welcome.
+end-to-end runs in each agent -- reports and fixes are welcome. A Gemini CLI
+run on 2026-11-05 (0.57) did not start: the CLI refused a personal Google
+login ("no longer supported for Gemini Code Assist for individuals"), so the
+Gemini adapter still waits for a run with a Gemini API key.
 
 **Gemini CLI** -- `settings.json`:
 
@@ -238,6 +252,8 @@ the check makes sure it cannot drift from the code.
   `crossweft baseline` (it is for adoption only), or attest a pair with
   `--other-side-unchanged` without re-reading every region, just to make the
   check pass; each needs a concrete reason.
+- If `crossweft` is not on the shell's PATH, run the same commands as
+  `python -m crossweft ...` (`python3` where that is the name).
 ```
 
 ## CI
@@ -246,7 +262,7 @@ GitHub Action (annotates the diff):
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: AnastasiyaW/crossweft@<release commit>  # v0.3.0; a tag can be moved, a commit cannot
+- uses: AnastasiyaW/crossweft@<release commit>  # v0.4.0; a tag can be moved, a commit cannot
 ```
 
 pre-commit:
@@ -254,7 +270,7 @@ pre-commit:
 ```yaml
 repos:
   - repo: https://github.com/AnastasiyaW/crossweft
-    rev: v0.3.0
+    rev: v0.4.0
     hooks:
       - id: crossweft-check
 ```

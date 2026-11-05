@@ -73,7 +73,7 @@ import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from . import fallbacks, harness, hazards, i18n, joints, ui_actions
+from . import fallbacks, harness, hazards, i18n, joints, signals, ui_actions
 from .scope import scope_hit
 
 SCHEMA_ID = "crossweft.map.v1"
@@ -92,7 +92,7 @@ RESERVED_JOINT_KINDS = (TOP_LEVEL_KEYS | {key.rstrip("s") for key in ENTITY_KEYS
                         | {"anchor", "anchors", "route", "routes", "status", "provenance", "seam",
                            "seams", "evidence", "coverage", "agents", "escape", "path_case",
                            "joints", "requirements", "freshness", "hazard",
-                           "hazards", "ui"})
+                           "hazards", "ui", "signal", "signals"})
 
 KINDS = {"actor", "executable", "service", "component", "library", "store", "external",
          "artifact", "tool", "contract", "site", "host", "ci", "group"}
@@ -100,7 +100,7 @@ STATUSES = ("current", "planned", "out-of-scope", "test-only", "legacy")
 TRANSPORTS = {"named-pipe", "https", "http-loopback", "process-launch", "file", "registry",
               "scm", "in-process", "generated-code", "build-input", "embedded", "git", "tunnel",
               "smtp", "sql", "object-store", "cache", "webhook", "oauth", "manual", "ui",
-              "mtls", "dpapi", "docker", "os-api", "ssh"}
+              "mtls", "dpapi", "docker", "os-api", "ssh", "queue"}
 EVIDENCE = ("none", "source", "ci", "runtime")
 SEVERITIES = ("blocker", "major", "minor", "info")
 FINDING_STATUSES = ("open", "accepted", "closed")
@@ -1455,7 +1455,7 @@ def _fields(kind: str) -> dict[str, tuple[bool, object]]:
             "docs": (False, "paths"), "owner": (False, "str"), "runs": (False, "str"),
             "evidence": (False, ("enum", set(EVIDENCE))), "waits_for": (False, "waits"),
             "notes": (False, "str"), "route_server": (False, "bool"),
-            "requirements": (False, "reqs"),
+            "requirements": (False, "reqs"), "signals": (False, ("signals", "blocks")),
         },
         "links": {
             "id": (True, "id"), "from": (True, "block"), "to": (True, "block"),
@@ -1467,13 +1467,14 @@ def _fields(kind: str) -> dict[str, tuple[bool, object]]:
             "from_anchors": (False, "anchors"), "to_anchors": (False, "anchors"),
             "evidence": (False, ("enum", set(EVIDENCE))), "notes": (False, "str"),
             "requirements": (False, "reqs"), "envs": (False, "str-list"),
-            "gone": (False, "gone"),
+            "gone": (False, "gone"), "signals": (False, ("signals", "links")),
         },
         "flows": {
             "id": (True, "id"), "name": (True, "str"), "status": (True, ("enum", set(STATUSES))),
             "summary": (True, "str"), "trigger": (False, "str"), "result": (False, "str"),
             "steps": (True, "steps"), "requirements": (False, "reqs"),
             "evidence": (False, ("enum", set(EVIDENCE))), "notes": (False, "str"),
+            "signals": (False, ("signals", "flows")),
         },
         "data": {
             "id": (True, "id"), "name": (True, "str"), "kind": (True, ("enum", DATA_KINDS)),
@@ -1495,6 +1496,7 @@ def _fields(kind: str) -> dict[str, tuple[bool, object]]:
         },
         "pairs": {
             "id": (True, "id"), "name": (True, "str"), "regions": (True, "regions"),
+            "compare": (False, ("enum", {"text", "tokens"})),
             "link": (False, "link"), "notes": (False, "str"),
         },
         "ui_actions": {
@@ -1552,6 +1554,9 @@ def _check_anchor_shape(anchor: object, label: str, errors: list[str]) -> None:
 
 def _check_value(model: Model, value: object, vtype: object, label: str) -> list[str]:
     errors: list[str] = []
+    if isinstance(vtype, tuple) and vtype[0] == "signals":
+        return signals.validate(vtype[1], value, label,
+                                lambda v, where: _check_value(model, v, "anchors", where))
     if isinstance(vtype, tuple) and vtype[0] == "enum":
         if not isinstance(value, str) or value not in vtype[1]:
             errors.append(f"{label}: '{value}' not one of {sorted(vtype[1])}")
@@ -1884,7 +1889,7 @@ def _ref_exists(model: Model, ref: object) -> bool:
 
 UI_SIDE_KEYS = {"label", "paths", "regex", "prefix_regex", "within", "exclude"}
 META_KEYS = {"$comment", "schema", "title", "verified_on", "verified_against", "planes", "lanes",
-             "route_scan", "coverage", "notes", "joint_kinds"}
+             "route_scan", "coverage", "notes", "joint_kinds", "signals"}
 ROUTE_SCAN_KEYS = {"routers", "router_search", "ignore_routers", "client_globs", "client_exclude",
                    "client_literal_regexes"}
 
@@ -2042,6 +2047,18 @@ def _validate_schema(model: Model) -> list[str]:
             errors += _validate_route_scan(meta["route_scan"])
         if "coverage" in meta:
             errors += _validate_coverage(meta["coverage"])
+        if "signals" in meta:
+            errors += signals.validate_meta(meta["signals"])
+    errors += signals.structure_errors(model)
+    for pair in model.entities["pairs"]:
+        if (not isinstance(pair, dict) or pair.get("compare") != "tokens"
+                or not isinstance(pair.get("regions"), list)):
+            continue
+        for region in pair["regions"]:
+            path = region.get("path") if isinstance(region, dict) else None
+            if isinstance(path, str) and _layout_is_syntax(path):
+                errors.append(f"pairs:{pair.get('id')}: compare 'tokens' cannot guard {path} -- "
+                              "indentation and line breaks are syntax there; keep 'text'")
     uses_requirements = any(item.get("requirements") for kind in ("blocks", "links", "flows",
                                                                   "findings")
                             for item in model.entities[kind])
@@ -2221,8 +2238,53 @@ def normalise(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n")).strip("\n")
 
 
-def fingerprint(content: str) -> str:
+def fingerprint(content: str, compare: str = "text") -> str:
+    """sha256 of a region. `compare: tokens` hashes the region with layout
+    removed (tokens_only) and prefixes the digest, so a lock entry written in
+    the other mode never matches by accident."""
+    if compare == "tokens":
+        return "tokens:" + hashlib.sha256(tokens_only(content).encode("utf-8")).hexdigest()
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+_WORDY = re.compile(r"[\w$]")
+_OPERATOR_CHARS = frozenset("+-*/%=<>!&|^~?:.")
+_LINE_COMMENT = re.compile(r"//|#")
+# languages where indentation or line breaks carry meaning: tokens mode would hide a re-nesting
+_LAYOUT_SYNTAX_EXT = frozenset({"py", "pyi", "yaml", "yml", "toml", "mk", "coffee", "nim", "haml",
+                                "slim", "pug", "sass", "fs", "fsx"})
+_LAYOUT_SYNTAX_NAMES = frozenset({"makefile", "gnumakefile"})
+
+
+def _layout_is_syntax(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1].lower()
+    return name in _LAYOUT_SYNTAX_NAMES or name.rsplit(".", 1)[-1] in _LAYOUT_SYNTAX_EXT
+
+
+def tokens_only(content: str) -> str:
+    """The region without layout: every whitespace run becomes one space
+    between two word characters (`int x`) or two operator characters (`i + ++j`
+    is not `i++ + j`) and disappears anywhere else (`f(a, b)` = `f(a,b)`), so
+    re-indenting, re-wrapping and reformatting keep the fingerprint while any
+    changed token, comment word or string character changes it. A line with a
+    line comment (`//`, `#`) keeps its line break: joining the next line into
+    the comment would comment that code out.
+    simplification: whitespace inside string literals is normalised too; a pair
+    whose strings differ only in spacing must keep `compare: text`."""
+    joined = "".join(line + ("\n" if _LINE_COMMENT.search(line) else " ")
+                     for line in content.splitlines())
+
+    def gap(match: re.Match) -> str:
+        if "\n" in match.group():
+            return "\n"
+        before = joined[match.start() - 1] if match.start() else ""
+        after = joined[match.end()] if match.end() < len(joined) else ""
+        if not (before and after):
+            return ""
+        both_words = _WORDY.match(before) and _WORDY.match(after)
+        both_operators = before in _OPERATOR_CHARS and after in _OPERATOR_CHARS
+        return " " if both_words or both_operators else ""
+    return re.sub(r"\s+", gap, joined)
 
 
 # Hex digits of the digest that ends a join/pair problem key. It only has to
@@ -2379,6 +2441,7 @@ class Checker:
         # could have raised are kept, so a finding it detects is never called
         # stale for want of a run (see reconcile_findings).
         self.scope: list[str] | None = None
+        self._edited: set[str] | None = None
         self.guards_total = 0
         self.guards_run = 0
         self.skipped_keys: set[str] = set()
@@ -2386,6 +2449,9 @@ class Checker:
         self.unverified: list[str] = []
         self.route_index: RouteIndex | None = None
         self.ui_traces: dict[str, list[ui_actions.Trace]] = {}
+        # what the route checks read, for `report`: "registered" [(method, path, rel,
+        # line)] and "client" {literal: [(rel, line)]} -- every literal, explained or not
+        self.route_facts: dict = {}
 
     # ------------------------------------------------------------- change scope
     def in_scope(self, targets: list[str]) -> bool:
@@ -2599,6 +2665,9 @@ class Checker:
             self.check_paths(block.get("docs", []), owner, "docs")
             for anchor in block.get("anchors", []):
                 self.check_anchor(anchor, owner)
+            heartbeat = (block.get("signals") or {}).get("heartbeat") or {}
+            for anchor in heartbeat.get("anchors", []):
+                self.check_anchor(anchor, f"{owner}.signals.heartbeat")
             for index, wait in enumerate(block.get("waits_for", [])):
                 for anchor in wait.get("anchors", []):
                     self.check_anchor(anchor, f"{owner}.waits_for[{index}]")
@@ -2709,11 +2778,51 @@ class Checker:
             distinct = {value for _, value, _, _ in values}
             if len(distinct) > 1:
                 detail = "; ".join(f"{side}={value!r}" for side, value, _, _ in values)
-                # point the reader at the first value that differs from the first one
-                first = values[0][1]
-                odd = next(v for v in values if v[1] != first)
+                at, hint = self._disagreement_site(values)
                 self.add(f"join:{join['id']}:{key_digest(placed)}", "joins",
-                         f"join:{join['id']} disagrees: {detail}", path=odd[2], line=odd[3])
+                         f"join:{join['id']} disagrees: {detail} -- {hint}", path=at[2], line=at[3])
+
+    def _edited_paths(self) -> set[str]:
+        """Files this check treats as edited: the `--changed` scope, else the
+        work tree's changes against HEAD. Empty when neither is known."""
+        if self.scope is not None:
+            return set(self.scope)
+        if self._edited is None:
+            try:
+                self._edited = set(_git_paths(self.root, "diff", "--name-only", "--relative",
+                                              "--no-renames", "HEAD"))
+            except (ImpactError, OSError):
+                self._edited = set()
+        return self._edited
+
+    def _disagreement_site(self, values: list[tuple[str, str, str, int]]
+                           ) -> tuple[tuple[str, str, str, int], str]:
+        """Where a join disagreement is reported, and a note naming the sides.
+        The location is the edited side when exactly one value group lies in
+        edited files (the side to fix, or the one the other must follow); else
+        a value outside the largest group; on a tie, the note says the location
+        is one side of several, so a reader does not take it for the culprit."""
+        groups: dict[str, list[tuple[str, str, str, int]]] = {}
+        for value in values:
+            groups.setdefault(value[1], []).append(value)
+        edited = self._edited_paths()
+        touched = [value for value, members in groups.items()
+                   if any(_scope_hit(path, m[2]) for m in members for path in edited)]
+        if len(touched) == 1:
+            others = sorted({m[0] for v, ms in groups.items() if v != touched[0] for m in ms})
+            return (groups[touched[0]][0],
+                    f"edited side: {groups[touched[0]][0][0]}; the other side ({', '.join(others)}) "
+                    f"still holds the old value -- update one side so both agree")
+        sizes = sorted((len(ms) for ms in groups.values()), reverse=True)
+        if sizes[0] > sizes[1]:
+            major = next(v for v, ms in groups.items() if len(ms) == sizes[0])
+            odd = next(v for v in values if v[1] != major)
+            return odd, f"{odd[0]} differs from the value the other {sizes[0]} sites share"
+        sites = ", ".join(v[0] for v in values)
+        # the first value that differs from the first site: where earlier releases pointed
+        odd = next(v for v in values if v[1] != values[0][1])
+        return odd, (f"the sides hold different values and none is marked as edited; "
+                           f"the location below is only one of them -- check every site: {sites}")
 
     def _set_files(self, side: dict, owner: str, key: str) -> list[str]:
         """The files one set side reads. Every entry must yield a file: a listed
@@ -2953,7 +3062,7 @@ class Checker:
                          f"pair:{pair['id']}: {rel}: {error}", fatal=True, path=rel)
                 ok = False
                 continue
-            hashes[rel] = fingerprint(content)
+            hashes[rel] = fingerprint(content, pair.get("compare", "text"))
             lines[rel] = line
         return hashes, lines, ok
 
@@ -2994,6 +3103,12 @@ class Checker:
                     changed + [f"{g} (no longer a region)" for g in gone])
                 other = (f"re-read {', '.join(unchanged)} and bring it in line"
                          if unchanged else "every region changed -- re-read them together")
+                compare = pair.get("compare", "text")
+                switched = [p for p in changed if p in before and
+                            before[p].startswith("tokens:") != (compare == "tokens")]
+                if switched and len(switched) == len(changed) and not gone:
+                    other = (f"the pair now compares '{compare}', so every fingerprint was "
+                             "recomputed -- re-read the regions once")
                 state = key_digest([(path, hashes[path]) for path in paths])
                 self.add(f"pair:changed:{ident}:{state}", "pairs",
                          f"pair:{ident} {detail}; {other}, then run `crossweft attest {ident} "
@@ -3312,6 +3427,7 @@ class Checker:
             for method, path, line in found:
                 registered.append((method, path, rel, line))
         self.items_checked += len(registered)
+        self.route_facts["registered"] = registered
         if scan.get("routers") and not registered:
             self.add("anchor:route-scan:empty", "anchors",
                      "route scan found no registrations -- misconfigured", fatal=True)
@@ -3398,9 +3514,10 @@ class Checker:
                     if literal is None:
                         continue       # the group did not take part: no literal here
                     literal_count += 1
+                    where = (rel, self.line_at(rel, match.start()))
+                    self.route_facts.setdefault("client", {}).setdefault(literal, []).append(where)
                     if mapped.explains(literal):
                         continue
-                    where = (rel, self.line_at(rel, match.start()))
                     norm = self._norm_route_path(literal)
                     if not norm.endswith("/") and retired.explains(literal):
                         called_gone.setdefault(literal, []).append(where)
@@ -3606,21 +3723,26 @@ class Checker:
             return
         code_paths = [p.rstrip("/") for b in self.model.entities["blocks"] for p in b.get("code", [])]
         ignored = {entry["path"].rstrip("/") for entry in coverage.get("ignore", [])}
+        areas = []
         for pattern in coverage.get("roots", []):
             for path in sorted(self.root.glob(pattern)):
                 # hidden directories and Python's byte-code cache are never source
                 # areas; `_billing` is (anything else goes in coverage.ignore)
                 if not path.is_dir() or path.name.startswith(".") or path.name == "__pycache__":
                     continue
-                rel = path.relative_to(self.root).as_posix()
-                self.items_checked += 1
-                if rel in ignored:
-                    continue
-                covered = any(cp == rel or cp.startswith(rel + "/") or rel.startswith(cp + "/")
-                              for cp in code_paths)
-                if not covered:
-                    self.add(f"coverage:{rel}", "coverage",
-                             f"source area {rel} is not placed on the map (no block covers it)")
+                areas.append(path.relative_to(self.root).as_posix())
+        # a git-ignored directory holding no tracked file (logs/ that a local run writes)
+        # is not source; coverage.ignore cannot hold it, since absent in CI it is stale
+        runtime_only = _git_ignored_untracked(self.root, [r for r in areas if r not in ignored])
+        for rel in areas:
+            self.items_checked += 1
+            if rel in ignored or rel in runtime_only:
+                continue
+            covered = any(cp == rel or cp.startswith(rel + "/") or rel.startswith(cp + "/")
+                          for cp in code_paths)
+            if not covered:
+                self.add(f"coverage:{rel}", "coverage",
+                         f"source area {rel} is not placed on the map (no block covers it)")
         for entry in coverage.get("ignore", []):
             if not (self.root / entry["path"]).exists():
                 self.add(f"coverage:stale-ignore:{entry['path']}", "coverage",
@@ -3708,6 +3830,7 @@ class Checker:
         self.check_pairs()
         self.check_routes()
         self.check_ui_actions()
+        signals.check(self)
         self.check_status()
         self.check_provenance()
         self.check_seams()
@@ -3966,6 +4089,9 @@ class CheckResult:
     # "unverified", "fallback"}; fallback says why the full check ran instead.
     # None for a plain `check`.
     changed: dict | None = None
+    # the Checker that produced this result (its model, route facts, UI traces), for
+    # `report`; None when the check stopped before running
+    checker: object = None
 
     @property
     def ok(self) -> bool:
@@ -4027,6 +4153,7 @@ def evaluate(cfg: Config, changed: str | None = None,
     if result.changed is not None:
         result.changed.update(guards_run=checker.guards_run, guards_total=checker.guards_total,
                               unverified=checker.unverified)
+    result.checker = checker
     result.new = [p for p in checker.problems if p.finding is None]
     result.known = [p for p in checker.problems if p.finding is not None]
     result.info = checker.info
@@ -4047,7 +4174,7 @@ def evaluate(cfg: Config, changed: str | None = None,
 
 
 CATEGORIES = ("anchors", "joins", "sets", "pairs", "routes", "status", "provenance", "seams",
-              "evidence", "coverage", "agents", "joints", "hazards", "ui")
+              "evidence", "coverage", "agents", "joints", "hazards", "ui", "signals")
 
 
 def _gh_escape(text: str, property_value: bool = False) -> str:
@@ -4076,6 +4203,8 @@ SARIF_RULES = {
     "joints": "A repository-specific joint plugin reports a disagreement or failed.",
     "hazards": "Script text that silently breaks what another program reads (crossweft/hazards.py).",
     "ui": "A control does not reach its handler, or a handler no control sends to.",
+    "signals": "A link, service or flow of the map carries no alarm, or its heartbeat, health "
+               "route or trace header is not in the code.",
     "stale-finding": "A recorded finding no longer reproduces and must be closed.",
     "render": "Generated documentation is out of date with the model.",
 }
@@ -4954,7 +5083,9 @@ class Renderer:
             lines.append("")
         return "\n".join(lines)
 
-    def viewer(self, template: str) -> str:
+    def viewer(self, template: str, report: dict | None = None) -> str:
+        """The map page; with `report` (crossweft report) it also carries what the
+        check found. `render` never passes one: its page depends on the model alone."""
         t = self.t
         payload = {
             "meta": {k: self.m.meta.get(k) for k in ("title", "verified_against", "verified_on",
@@ -4969,8 +5100,12 @@ class Renderer:
                      "dataKind": t["data_kind"], "ui": t["ui"]},
             "lang": self.cfg.language,
         }
+        if report is not None:
+            payload["report"] = {**report, "i18n": t["report"]}
         blob = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        blob = blob.replace("</", "<\\/")
+        # every `<`, not only `</`: `<!--<script` in model text would otherwise keep the
+        # page's own </script> from closing the element (HTML "script data double escaped")
+        blob = blob.replace("<", "\\u003c")
         if "/*__CROSSWEFT_DATA__*/" not in template:
             raise ModelError("viewer template lacks the /*__CROSSWEFT_DATA__*/ placeholder")
         title = html.escape(self.m.meta.get("title", t["ui"]["title"]))
@@ -5513,6 +5648,30 @@ def _git_paths(root: Path, *args: str) -> list[str]:
         detail = proc.stderr.decode("utf-8", "replace").strip() or f"exit {proc.returncode}"
         raise ImpactError(f"git {' '.join(args)} failed: {detail}")
     return [p for p in proc.stdout.decode("utf-8", "replace").split("\0") if p]
+
+
+def _git_ignored_untracked(root: Path, rels: list[str]) -> set[str]:
+    """Of the directories `rels` (relative to `root`), those git ignores and that hold
+    no tracked file. Outside a work tree or when git fails: none, so the area is
+    reported as before (an unknown answer never hides a source area)."""
+    if not rels:
+        return set()
+    base = ["git", "-C", str(root), "-c", "core.quotePath=false"]
+    try:
+        probe = subprocess.run([*base, "check-ignore", "--stdin", "-z"], capture_output=True,
+                               input="".join(r + "/\0" for r in rels).encode("utf-8"))
+        if probe.returncode not in (0, 1):
+            return set()
+        hits = {p.rstrip("/") for p in probe.stdout.decode("utf-8", "replace").split("\0") if p}
+        if not hits:
+            return set()
+        tracked = subprocess.run([*base, "ls-files", "-z", "--", *sorted(hits)], capture_output=True)
+        if tracked.returncode != 0:
+            return set()
+    except OSError:
+        return set()
+    held = [p for p in tracked.stdout.decode("utf-8", "replace").split("\0") if p]
+    return {h for h in hits if not any(p == h or p.startswith(h + "/") for p in held)}
 
 
 def changed_files(root: Path, base: str | None) -> tuple[list[str], str]:

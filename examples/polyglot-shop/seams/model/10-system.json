@@ -10,7 +10,11 @@
       "summary": "TypeScript single-page app: shows prices, places and reads orders.",
       "code": [
         "web/"
-      ]
+      ],
+      "signals": {
+        "health": "https://shop.example.com/",
+        "audience": "customer"
+      }
     },
     {
       "id": "api",
@@ -22,7 +26,12 @@
       "code": [
         "server/"
       ],
-      "route_server": true
+      "route_server": true,
+      "signals": {
+        "health": "GET /healthz",
+        "url": "https://shop.example.com",
+        "audience": "customer"
+      }
     },
     {
       "id": "worker",
@@ -33,7 +42,18 @@
       "summary": "Python job that moves paid orders to shipped.",
       "code": [
         "worker/"
-      ]
+      ],
+      "signals": {
+        "heartbeat": {
+          "every": "30s",
+          "anchors": [
+            {
+              "path": "worker/worker.py",
+              "find": "def beat("
+            }
+          ]
+        }
+      }
     },
     {
       "id": "orders-db",
@@ -102,7 +122,10 @@
           "path": "server/main.go",
           "find": "r.Route(\"/v1\""
         }
-      ]
+      ],
+      "signals": {
+        "red": true
+      }
     },
     {
       "id": "api-db",
@@ -222,7 +245,10 @@
           "path": "server/main.go",
           "find": "r.Get(\"/healthz\""
         }
-      ]
+      ],
+      "signals": {
+        "skip": "the load balancer's own liveness check; signals.health of block api watches the same route"
+      }
     }
   ],
   "flows": [
@@ -246,7 +272,15 @@
           "action": "order JSON",
           "reply": true
         }
-      ]
+      ],
+      "signals": {
+        "probe": {
+          "every": "15m",
+          "creates": "POST /v1/orders with the item 'probe'",
+          "expects": "GET /v1/orders/{id} returns the probe order from the database",
+          "cleanup": "delete the probe row from orders by its id"
+        }
+      }
     }
   ],
   "data": [

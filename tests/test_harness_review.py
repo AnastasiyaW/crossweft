@@ -69,6 +69,8 @@ def git_bash() -> str | None:
 
 # the shell Claude Code runs hook commands in: Git Bash on Windows, sh elsewhere
 SHELL = git_bash() if os.name == "nt" else shutil.which("sh")
+# a loaded test machine can start a shell slower than the 10 s production limit
+PROBE_TIMEOUT = {"CROSSWEFT_LAUNCHER_PROBE_TIMEOUT": "25"}
 
 
 class DemoCase(unittest.TestCase):
@@ -123,7 +125,7 @@ class DemoCase(unittest.TestCase):
         """Claude Code started in the demo root, hooks run by SHELL, with a
         `crossweft` on PATH."""
         return {"PATH": str(self.fake_launcher_dir()), "CLAUDE_PROJECT_DIR": str(self.root),
-                "CROSSWEFT_SHELL": SHELL or "", **extra}
+                "CROSSWEFT_SHELL": SHELL or "", **PROBE_TIMEOUT, **extra}
 
 
 # 1 -- the plugin must not go quiet for project hooks that cannot run ----------
@@ -144,7 +146,36 @@ class PluginDefersOnlyToHooksThatRun(DemoCase):
         self.drift()
         with mock.patch.dict(os.environ, self.session_env()):
             code, out, _ = self.hook("stop", "--from-plugin")
-        self.assertEqual((code, out), (0, None))
+            report = "" if (code, out) == (0, None) else self.launcher_probe_report()
+        self.assertEqual((code, out), (0, None), report)
+
+    def test_probe_timeout_override_is_bounded_and_strict(self) -> None:
+        cases = {None: 10, "": 10, "3": 3.0, "25": 25.0, "600": harness.LAUNCHER_PROBE_TIMEOUT_MAX}
+        for raw, want in cases.items():
+            env = {} if raw is None else {"CROSSWEFT_LAUNCHER_PROBE_TIMEOUT": raw}
+            with mock.patch.dict(os.environ, env, clear=False):
+                if raw is None:
+                    os.environ.pop("CROSSWEFT_LAUNCHER_PROBE_TIMEOUT", None)
+                self.assertEqual(harness.launcher_probe_timeout(), want, raw)
+        for bad in ("ten", "0", "-1"):
+            with mock.patch.dict(os.environ, {"CROSSWEFT_LAUNCHER_PROBE_TIMEOUT": bad}):
+                with self.assertRaises(harness.HarnessError):
+                    harness.launcher_probe_timeout()
+
+    def launcher_probe_report(self) -> str:
+        """The launcher probe once more, with what it answered: this test failed
+        about 1 run in 4 on 2026-10-10 and then not in 12 class runs on
+        2026-11-05, so a failure has to bring its own evidence."""
+        started = time.monotonic()
+        try:
+            probe = subprocess.run([SHELL, "-c", "crossweft --version"], cwd=self.root,
+                                   stdin=subprocess.DEVNULL, capture_output=True,
+                                   timeout=harness.launcher_probe_timeout())
+            answer = f"rc={probe.returncode} stdout={probe.stdout!r} stderr={probe.stderr[-300:]!r}"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            answer = repr(exc)
+        return (f"launcher probe rerun ({SHELL}, PATH={os.environ.get('PATH')}): {answer} "
+                f"in {time.monotonic() - started:.1f}s")
 
     def test_a_cmd_shim_is_not_what_bash_runs(self) -> None:
         # Git Bash does not run `crossweft.cmd` for `crossweft` (shutil.which
@@ -167,13 +198,13 @@ class PluginDefersOnlyToHooksThatRun(DemoCase):
         self.assertEqual(self.agents("--command", launcher)[0], 0)
         self.drift()
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-        env.update(CLAUDE_PROJECT_DIR=str(self.root), CROSSWEFT_SHELL=SHELL or "")
+        env.update(CLAUDE_PROJECT_DIR=str(self.root), CROSSWEFT_SHELL=SHELL or "", **PROBE_TIMEOUT)
         with mock.patch.dict(os.environ, env, clear=True):
             _, out, _ = self.hook("stop", "--from-plugin")
         self.assertIsNotNone(out, "crossweft is not importable from the project: its hook fails")
         self.assertEqual(out["decision"], "block")
         with mock.patch.dict(os.environ, {"PYTHONPATH": str(REPO), "CROSSWEFT_SHELL": SHELL or "",
-                                          "CLAUDE_PROJECT_DIR": str(self.root)}):
+                                          "CLAUDE_PROJECT_DIR": str(self.root), **PROBE_TIMEOUT}):
             self.assertEqual(self.hook("stop", "--from-plugin")[:2], (0, None))
 
     @unittest.skipIf(_crossweft_importable_without_pythonpath(),

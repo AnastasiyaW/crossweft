@@ -14,6 +14,13 @@
       "client_globs": ["web/src/**/*.ts", "web/public/**/*.js"],
       "client_literal_regexes": ["[\"'`](/v1/[^\"'`$]*)"]
     },
-    "coverage": {"roots": ["server", "web", "worker"]}
+    "coverage": {"roots": ["server", "web", "worker"]},
+    "signals": {
+      "notify": ["chat", "email"],
+      "watchdog": {"every": "1m"},
+      "trace_header": "traceparent",
+      "product": "polyglot-shop",
+      "owner": "platform"
+    }
   }
 }

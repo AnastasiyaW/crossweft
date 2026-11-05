@@ -97,7 +97,7 @@ fails again.
 ## Install
 
 ```bash
-python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.3.0"
+python -m pip install "git+https://github.com/AnastasiyaW/crossweft.git@v0.4.0"
 ```
 
 Requires Python 3.9+ and Git. This release is distributed from GitHub. The
@@ -178,7 +178,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: AnastasiyaW/crossweft@<release commit>  # v0.3.0
+      - uses: AnastasiyaW/crossweft@<release commit>  # v0.4.0
 ```
 
 Pin the release commit shown on the [release page](https://github.com/AnastasiyaW/crossweft/releases/latest):
@@ -193,7 +193,7 @@ release tags here are immutable, but a commit cannot move at all.
 ## Five minutes on the demo
 
 ```bash
-git clone --branch v0.3.0 --depth 1 https://github.com/AnastasiyaW/crossweft
+git clone --branch v0.4.0 --depth 1 https://github.com/AnastasiyaW/crossweft
 cd crossweft
 python -m pip install -e .
 cd examples/polyglot-shop && crossweft check
@@ -220,6 +220,12 @@ prints the chain of every button, and
 one in Chromium and waits for its request.
 `crossweft render` turns the map into Markdown pages with Mermaid diagrams and
 an interactive [`viewer.html`](examples/polyglot-shop/seams/viewer.html).
+`crossweft report` draws the same map with what the check found on it: broken
+links in red, a Routes tab and a Buttons tab. With `meta.signals`, `check` also
+demands an alarm on every link, running service and flow, and `crossweft
+signals` prints the alarm rules for them ([docs/signals.md](docs/signals.md)).
+`crossweft doctor` names the crossweft installs on this machine and which one
+runs.
 
 [`examples/decision-ledger`](examples/decision-ledger) keeps agreed settings in a
 signed, append-only ledger: changing the code, an old entry, the signer file or
@@ -330,7 +336,7 @@ missing. Details: [docs/agents.md](docs/agents.md).
 
 Then put it where the rest of the work happens:
 
-- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.3.0` (annotates the
+- **CI**: `uses: AnastasiyaW/crossweft@<release commit> # v0.4.0` (annotates the
   diff; pin the commit like any action, a tag can be moved), the
   `crossweft-check` pre-commit hook, or `crossweft check --format github|json|sarif`
   (SARIF 2.1.0 for GitHub code scanning; recorded findings arrive as suppressed
@@ -406,7 +412,7 @@ hand-written seam must declare itself and carry a guard, is what crossweft adds.
 
 ## Status
 
-`0.3.0`, alpha. The engine grew inside a commercial product that spans several
+`0.4.0`, alpha. The engine grew inside a commercial product that spans several
 languages and processes, where one-sided changes kept reaching installs; this
 is its extraction. Built by [HappyIn](https://happyin.ai).
 

@@ -33,6 +33,7 @@ type Order struct {
 
 func requireVersion(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("%s %s traceparent=%s", r.Method, r.URL.Path, r.Header.Get("traceparent"))
 		if r.Header.Get(APIVersionHeader) != APIVersion {
 			http.Error(w, "unsupported API version", http.StatusPreconditionFailed)
 			return

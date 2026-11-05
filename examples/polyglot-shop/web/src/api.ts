@@ -12,8 +12,15 @@ export interface Order {
   status: OrderStatus;
 }
 
+// W3C trace context: one request id from the browser through the API into the logs.
+function traceparent(): string {
+  const hex = (bytes: number) =>
+    Array.from(crypto.getRandomValues(new Uint8Array(bytes)), (b) => b.toString(16).padStart(2, "0")).join("");
+  return `00-${hex(16)}-${hex(8)}-01`;
+}
+
 function headers(): HeadersInit {
-  return { [VERSION_HEADER]: API_VERSION, "Content-Type": "application/json" };
+  return { [VERSION_HEADER]: API_VERSION, "Content-Type": "application/json", traceparent: traceparent() };
 }
 
 export async function getOrder(id: string): Promise<Order> {
