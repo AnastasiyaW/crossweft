@@ -186,6 +186,12 @@ class JointPlugins(Fixture):
         self.assertIn("other side: server/main.go", output)
         self.assertNotIn("Not on the map", output)
 
+    def test_load_model_takes_the_repo_root(self) -> None:
+        self.setup_repo()
+        by_root = engine.load_model(self.root)
+        by_cfg = engine.load_model(engine.load_config(self.root))
+        self.assertEqual([p.name for p in by_root.files], [p.name for p in by_cfg.files])
+
     def test_impact_names_a_kind_it_cannot_place(self) -> None:
         self.setup_repo(PORTS.replace("def impact(", "def _unused_impact("),
                         entries=[{"id": "api", "file": "main", "port": 8080}])

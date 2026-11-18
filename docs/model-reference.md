@@ -291,6 +291,38 @@ The static check proves the wiring in the source; only a run proves the handler
 does not throw, the button is not covered, and the page builds no button the map
 does not know.
 
+#### `docs` -- the help of each control stays current
+
+A help page that describes each button goes stale silently: the handler changes,
+the page does not, and every check stays green. With `docs`, each exact control
+has one help section, and the code behind the control is attested together with
+that section, one pair per control:
+
+```json
+"docs": {"label": "admin help", "paths": ["docs/help.md"],
+         "regex": "^##.*\\{#([a-z-]+)\\}"}
+```
+
+`regex` (one group: the control's id) starts a section; it runs to the next match
+in that file, or to its end. The code behind a control is every hop step its
+chain took: for each, the text from that hop's match to the next match of the
+same hop in that file (the next table line, the next `function`). Line endings and
+trailing blanks are ignored. Both fingerprints land in the lock file
+(`seams/pairs.lock.json`, key `docs`) through
+`crossweft attest --ui <id> <control>... --reason "..."` (`--all` for every
+unattested or changed control). Like a pair, a code change whose help did not
+change is refused unless `--other-side-unchanged` says the help was re-read and
+still holds.
+
+Problems: `ui:<id>:undocumented:<control>` (no section), `ui:<id>:doc-orphan:<item>`
+(a section no control sends), `ui:<id>:doc-duplicate:<item>`,
+`ui:<id>:doc-unattested:<control>`, `ui:<id>:doc-stale:<control>:<state>` (the code,
+the help, or both changed since the attestation), `ui:<id>:doc-stale-lock:<control>`
+(fixed by `crossweft attest --prune`). Limits: a dynamic control has no section of
+its own and is not checked; a helper the handler calls lies outside its segment, so
+a change there is not seen -- put the helper in a hop, or a `pair`, if its
+behaviour is what the help describes.
+
 ## Anchors
 
 `{"path": "server/main.go", "find": "type Order struct"}` or

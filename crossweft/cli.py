@@ -207,7 +207,10 @@ def build_parser() -> argparse.ArgumentParser:
         description="Record in the lock file that every region of a pair was re-read and "
                     "agrees.",
         epilog='Example: crossweft attest price-rounding --reason "both round half-up"')
-    attest.add_argument("ids", nargs="*", help="pair ids")
+    attest.add_argument("ids", nargs="*", help="pair ids (with --ui: control ids)")
+    attest.add_argument("--ui", metavar="ID",
+                        help="a ui_action with 'docs': attest the help section of each named "
+                             "control against the code behind it")
     attest.add_argument("--reason", help="what you compared (required, lands in the lock file)")
     attest.add_argument("--all", action="store_true", help="every changed or unattested pair")
     attest.add_argument("--prune", action="store_true",
@@ -452,7 +455,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_agents(cfg, args.launcher, args.dry_run)
     if command == "attest":
         return engine.run_attest(cfg, args.ids, args.reason, args.all, args.prune,
-                                 args.other_side_unchanged)
+                                 args.other_side_unchanged, args.ui)
     if command == "baseline":
         return engine.run_baseline(cfg, args.owner, args.next_step, args.file)
     if command == "discover":

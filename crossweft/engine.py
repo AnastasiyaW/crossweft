@@ -1377,7 +1377,9 @@ class Model:
         return first in self.ancestors(second) or second in self.ancestors(first)
 
 
-def load_model(cfg: Config) -> Model:
+def load_model(cfg: Config | Path) -> Model:
+    if isinstance(cfg, Path):
+        cfg = load_config(cfg)
     model = Model(cfg)
     model_dir, root = model.model_dir, cfg.root
     if not model_dir.is_dir():
@@ -1502,7 +1504,8 @@ def _fields(kind: str) -> dict[str, tuple[bool, object]]:
         "ui_actions": {
             "id": (True, "id"), "name": (True, "str"), "controls": (True, "ui-side"),
             "hops": (True, "ui-hops"), "link": (False, "link"), "routes": (False, "bool"),
-            "orphans": (False, "bool"), "allow": (False, "ui-allow"), "notes": (False, "str"),
+            "orphans": (False, "bool"), "allow": (False, "ui-allow"), "docs": (False, "ui-docs"),
+            "notes": (False, "str"),
         },
         "findings": {
             "id": (True, "finding-id"), "title": (True, "str"),
@@ -1773,6 +1776,8 @@ def _check_value(model: Model, value: object, vtype: object, label: str) -> list
         else:
             for index, hop in enumerate(value):
                 errors += _ui_side_errors(model, hop, f"{label}[{index}]", controls=False)
+    elif vtype == "ui-docs":
+        errors += _ui_docs_errors(model, value, label)
     elif vtype == "ui-allow":
         if not isinstance(value, list):
             errors.append(f"{label}: must be a list")
@@ -1870,6 +1875,24 @@ def _ui_side_errors(model: Model, value: object, label: str, controls: bool) -> 
         errors += _check_regex_one_group(value["prefix_regex"], f"{label}.prefix_regex")
     if "within" in value:
         errors += _check_regex_one_group(value["within"], f"{label}.within")
+    if "exclude" in value:
+        errors += _check_value(model, value["exclude"], "paths", f"{label}.exclude")
+    return errors
+
+
+UI_DOCS_KEYS = {"label", "paths", "regex", "exclude"}
+
+
+def _ui_docs_errors(model: Model, value: object, label: str) -> list[str]:
+    """A ui_action's help: `regex` (one group, the control's id) starts a section,
+    which runs to the next match or the end of the file."""
+    if not isinstance(value, dict):
+        return [f"{label}: must be an object"]
+    unknown = set(value) - UI_DOCS_KEYS
+    errors = [f"{label}: unknown key(s) {sorted(unknown)}"] if unknown else []
+    errors += _check_value(model, value.get("label"), "str", f"{label}.label")
+    errors += _check_value(model, value.get("paths"), "paths", f"{label}.paths")
+    errors += _check_regex_one_group(value.get("regex"), f"{label}.regex")
     if "exclude" in value:
         errors += _check_value(model, value["exclude"], "paths", f"{label}.exclude")
     return errors
@@ -2127,7 +2150,7 @@ def _validate_schema(model: Model) -> list[str]:
         if not finding.get("detected_by") and not finding.get("evidence"):
             errors.append(f"{label}: needs detected_by (check keys or 'manual') or evidence")
     for entry in model.entities["ui_actions"]:
-        sides = [entry.get("controls")] + list(entry.get("hops") or [])
+        sides = [entry.get("controls")] + list(entry.get("hops") or []) + [entry.get("docs")]
         names = [side.get("label") for side in sides if isinstance(side, dict)]
         for name in sorted({n for n in names if isinstance(n, str) and names.count(n) > 1}):
             errors.append(f"{model.where(entry)}: ui_action {entry.get('id')}: label '{name}' "
@@ -2238,6 +2261,13 @@ def normalise(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").split("\n")).strip("\n")
 
 
+def _normalise_text(text: str) -> str:
+    """Line endings and trailing blanks do not change meaning: a CRLF checkout and an LF
+    one fingerprint alike."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\n".join(line.rstrip() for line in lines).strip("\n")
+
+
 def fingerprint(content: str, compare: str = "text") -> str:
     """sha256 of a region. `compare: tokens` hashes the region with layout
     removed (tokens_only) and prefixes the digest, so a lock entry written in
@@ -2328,6 +2358,18 @@ def read_lock(cfg: Config) -> dict:
                 or not DATE_RE.match(str(entry.get("attested_on", "")))):
             raise ModelError(f"{cfg.lock_file.as_posix()}: entry '{ident}' needs regions, a "
                              "non-empty reason and attested_on (YYYY-MM-DD)")
+    docs = data.get("docs", {})
+    if not isinstance(docs, dict) or not all(isinstance(v, dict) for v in docs.values()):
+        raise ModelError(f"{cfg.lock_file.as_posix()}: 'docs' must map ui_action ids to "
+                         "{control: entry}")
+    for ui_id, controls in docs.items():
+        for control, entry in controls.items():
+            if (not isinstance(entry, dict) or not isinstance(entry.get("code"), str)
+                    or not isinstance(entry.get("doc"), str)
+                    or not isinstance(entry.get("reason"), str) or not entry["reason"].strip()
+                    or not DATE_RE.match(str(entry.get("attested_on", "")))):
+                raise ModelError(f"{cfg.lock_file.as_posix()}: docs entry '{ui_id}/{control}' "
+                                 "needs code, doc, a non-empty reason and attested_on (YYYY-MM-DD)")
     return data
 
 
@@ -2449,6 +2491,11 @@ class Checker:
         self.unverified: list[str] = []
         self.route_index: RouteIndex | None = None
         self.ui_traces: dict[str, list[ui_actions.Trace]] = {}
+        # (side label, rel, line) -> the text from that match to the next one on the side:
+        # the code a hop step stands for, fingerprinted against the control's help section
+        self.ui_segments: dict[tuple[str, str, int], str] = {}
+        # ui id -> {control: {"code": digest, "doc": digest}} for `attest --ui`
+        self.ui_doc_states: dict[str, dict[str, dict[str, str]]] = {}
         # what the route checks read, for `report`: "registered" [(method, path, rel,
         # line)] and "client" {literal: [(rel, line)]} -- every literal, explained or not
         self.route_facts: dict = {}
@@ -2951,18 +2998,21 @@ class Checker:
                              f"{owner}: 'within' regex not matched in {rel}: {side['within']!r}",
                              fatal=True, path=rel)
             for offset, region in regions:
-                for name, pattern in patterns:
-                    for match in pattern.finditer(region):
-                        item = match.group(1)
-                        if item is None or (not item and not (controls and name == "prefix_regex")):
-                            continue
-                        found[name] += 1
-                        place = ui_actions.Place(rel, self.line_at(rel, offset + match.start()))
-                        if name == "prefix_regex":
-                            prefixes.setdefault(item, place)
-                        else:
-                            value = match.group(2) if pattern.groups >= 2 else None
-                            keys.setdefault(item, []).append((value, place))
+                hits = sorted(((match.start(), name, match) for name, pattern in patterns
+                               for match in pattern.finditer(region)), key=lambda hit: hit[0])
+                for index, (start, name, match) in enumerate(hits):
+                    item = match.group(1)
+                    if item is None or (not item and not (controls and name == "prefix_regex")):
+                        continue
+                    found[name] += 1
+                    place = ui_actions.Place(rel, self.line_at(rel, offset + start))
+                    end = hits[index + 1][0] if index + 1 < len(hits) else len(region)
+                    self.ui_segments.setdefault((side["label"], rel, place.line), region[start:end])
+                    if name == "prefix_regex":
+                        prefixes.setdefault(item, place)
+                    else:
+                        value = match.group(2) if match.re.groups >= 2 else None
+                        keys.setdefault(item, []).append((value, place))
         for name, _ in patterns:
             # each pattern on its own: a misspelt regex must not hide behind a
             # prefix_regex that still matches
@@ -2981,7 +3031,7 @@ class Checker:
             [d for d in self.declared_routes() if d[2]["status"] == "current"])
         for entry in entries:
             owner = f"ui:{entry['id']}"
-            sides = [entry["controls"], *entry["hops"]]
+            sides = [entry["controls"], *entry["hops"]] + ([entry["docs"]] if "docs" in entry else [])
             targets = [t for side in sides for t in side.get("paths", [])]
             if not self.guard(targets, prefixes=(f"{owner}:", f"anchor:{owner}:")):
                 continue
@@ -3038,6 +3088,108 @@ class Checker:
             for item in sorted(allowed - used):
                 self.add(f"{owner}:stale-allow:{item}", "ui",
                          f"{owner}: allow entry '{item}' no longer needed -- remove it", fatal=True)
+            if "docs" in entry:
+                self._check_ui_docs(entry, owner, traces)
+
+    def _ui_doc_sections(self, docs: dict, owner: str) -> dict[str, tuple[str, int, str]]:
+        """id -> (file, line, section text). A section starts at a `regex` match and
+        runs to the next match in that file, or to its end."""
+        sections: dict[str, tuple[str, int, str]] = {}
+        files = self._set_files(docs, owner, "paths")
+        pattern = re.compile(docs["regex"], re.MULTILINE)
+        for rel in files:
+            text = self.text(rel) or ""
+            hits = [m for m in pattern.finditer(text) if m.group(1)]
+            for index, match in enumerate(hits):
+                end = hits[index + 1].start() if index + 1 < len(hits) else len(text)
+                item, line = match.group(1), self.line_at(rel, match.start())
+                if item in sections:
+                    first = sections[item]
+                    self.add(f"{owner}:doc-duplicate:{item}", "ui",
+                             f"{owner}: '{docs['label']}' has two sections for {item!r} "
+                             f"({first[0]}:{first[1]} and {rel}:{line}) -- only one can be the "
+                             "help of that control", path=rel, line=line)
+                    continue
+                sections[item] = (rel, line, text[match.start():end])
+        if files and not sections:
+            self.add(f"anchor:{owner}:items:{docs['label']}:regex", "anchors",
+                     f"{owner}: '{docs['label']}' regex extracted nothing (regex/paths wrong?)",
+                     fatal=True, path=files[0])
+        return sections
+
+    def _check_ui_docs(self, entry: dict, owner: str, traces: list[ui_actions.Trace]) -> None:
+        """Each control has one help section, and the code behind the control and that
+        section are attested together: a change to either side since `crossweft attest
+        --ui` is reported until someone re-reads both (the pairs mechanism, one pair per
+        control)."""
+        docs = entry["docs"]
+        sections = self._ui_doc_sections(docs, owner)
+        if not sections:
+            return
+        # a dynamic control builds its id at run time: it has no single section to own
+        exact = {trace.control: trace for trace in traces if not trace.dynamic}
+        for control in sorted(set(exact) - set(sections)):
+            place = exact[control].place
+            self.add(f"{owner}:undocumented:{control}", "ui",
+                     f"{owner}: control {control!r} has no section in '{docs['label']}' -- "
+                     "write its help", path=place.rel, line=place.line)
+        for item in sorted(set(sections) - set(exact)):
+            rel, line, _ = sections[item]
+            self.add(f"{owner}:doc-orphan:{item}", "ui",
+                     f"{owner}: '{docs['label']}' documents {item!r}, which no control in "
+                     f"'{entry['controls']['label']}' sends -- remove the section or restore "
+                     "the control", path=rel, line=line)
+        states: dict[str, dict[str, str]] = {}
+        for control in sorted(set(exact) & set(sections)):
+            parts = [(step.hop, step.place.rel,
+                      _normalise_text(self.ui_segments.get(
+                          (step.hop, step.place.rel, step.place.line), "")))
+                     for step in exact[control].steps if step.place is not None]
+            states[control] = {
+                "code": fingerprint(json.dumps(parts, ensure_ascii=False)) if parts else "none",
+                "doc": fingerprint(_normalise_text(sections[control][2]))}
+        self.ui_doc_states[entry["id"]] = states
+        self.items_checked += len(states)
+        lock_name = self.model.cfg.lock_file.as_posix()
+        try:
+            attested = (read_lock(self.model.cfg).get("docs") or {}).get(entry["id"]) or {}
+        except ModelError as exc:
+            self.add("pair:lock", "pairs", str(exc), fatal=True, path=lock_name)
+            return
+        command = f"crossweft attest --ui {entry['id']}"
+        for control, state in states.items():
+            rel, line, _ = sections[control]
+            before = attested.get(control)
+            if before is None:
+                self.add(f"{owner}:doc-unattested:{control}", "ui",
+                         f"{owner}: the help of {control!r} ({rel}:{line}) was never attested "
+                         f"against the code behind it -- read both, then `{command} {control} "
+                         "--reason \"...\"`", path=rel, line=line)
+                continue
+            changed = [side for side in ("code", "doc") if before.get(side) != state[side]]
+            if not changed:
+                continue
+            if changed == ["code"]:
+                what = (f"the code behind {control!r} changed since {before['attested_on']}, "
+                        f"its help did not -- re-read the section and bring it in line")
+                place = exact[control].steps[-1].place if exact[control].steps else None
+            elif changed == ["doc"]:
+                what = (f"the help of {control!r} changed since {before['attested_on']} -- "
+                        "check it still describes what the code does")
+                place = None
+            else:
+                what = (f"the code behind {control!r} and its help both changed since "
+                        f"{before['attested_on']} -- check they agree")
+                place = None
+            where_rel, where_line = (place.rel, place.line) if place else (rel, line)
+            self.add(f"{owner}:doc-stale:{control}:{key_digest([tuple(state.values())])}", "ui",
+                     f"{owner}: {what}, then `{command} {control} --reason \"...\"` "
+                     f"(help: {rel}:{line})", path=where_rel, line=where_line)
+        for control in sorted(set(attested) - set(states)):
+            self.add(f"{owner}:doc-stale-lock:{control}", "ui",
+                     f"{lock_name} attests the help of {control!r}, which {owner} no longer "
+                     f"has (control or section gone) -- run `crossweft attest --prune`",
+                     fatal=True, path=lock_name)
 
     # ------------------------------------------------------------------ pairs
     def pair_state(self, pair: dict) -> tuple[dict[str, str], dict[str, int], bool]:
@@ -3651,7 +3803,8 @@ class Checker:
         if kind == "pairs":
             return {region["path"] for region in entry.get("regions", [])}
         if kind == "ui_actions":
-            return {f for side in [entry["controls"], *entry["hops"]]
+            return {f for side in [entry["controls"], *entry["hops"],
+                                   *([entry["docs"]] if "docs" in entry else [])]
                     for f in self.expand(side.get("paths", []), side.get("exclude"))}
         files: set[str] = set()
         for key in ("left", "right"):
@@ -6681,10 +6834,12 @@ def _load_valid(cfg: Config) -> Model | None:
 
 
 def run_attest(cfg: Config, ids: list[str], reason: str | None, all_pending: bool,
-               prune: bool, other_side_unchanged: bool = False) -> int:
+               prune: bool, other_side_unchanged: bool = False, ui: str | None = None) -> int:
     """Record the current fingerprints of pairs after someone has read every
     region. The reason is mandatory and lands in the lock file, so review sees
-    WHY a changed pair was accepted -- attest is a statement, not a reset."""
+    WHY a changed pair was accepted -- attest is a statement, not a reset.
+    With `ui`, the ids are controls of that ui_action and what is recorded is
+    the code behind each control together with its help section."""
     model = _load_valid(cfg)
     if model is None:
         return 2
@@ -6693,6 +6848,8 @@ def run_attest(cfg: Config, ids: list[str], reason: str | None, all_pending: boo
     except ModelError as exc:
         out(f"[ERR] {exc}")
         return 2
+    if ui is not None:
+        return _attest_ui(cfg, model, lock, ui, ids, reason, all_pending, other_side_unchanged)
     declared = {pair["id"]: pair for pair in model.entities["pairs"]}
     unknown = [ident for ident in ids if ident not in declared]
     if unknown:
@@ -6705,6 +6862,15 @@ def run_attest(cfg: Config, ids: list[str], reason: str | None, all_pending: boo
             del lock["pairs"][ident]
             changed_lock = True
             out(f"[OK] pruned lock entry for undeclared pair '{ident}'")
+        if lock.get("docs"):
+            states = _ui_doc_states(model)
+            for ui_id in sorted(lock["docs"]):
+                for control in sorted(set(lock["docs"][ui_id]) - set(states.get(ui_id, {}))):
+                    del lock["docs"][ui_id][control]
+                    changed_lock = True
+                    out(f"[OK] pruned help attestation of '{control}' (ui:{ui_id})")
+                if not lock["docs"][ui_id]:
+                    del lock["docs"][ui_id]
     checker = Checker(model)
     states = {}
     for ident, pair in declared.items():
@@ -6763,6 +6929,75 @@ def run_attest(cfg: Config, ids: list[str], reason: str | None, all_pending: boo
         except ModelError as exc:
             out(f"[ERR] {exc}")
             return 2
+        out(f"wrote {cfg.lock_file.as_posix()} -- commit it with the change")
+    return 0
+
+
+def _ui_doc_states(model: Model) -> dict[str, dict[str, dict[str, str]]]:
+    """What a full check computes for every ui_action with docs: control -> code and
+    help fingerprints."""
+    checker = Checker(model)
+    checker.check_ui_actions()
+    return checker.ui_doc_states
+
+
+def _attest_ui(cfg: Config, model: Model, lock: dict, ui: str, ids: list[str],
+               reason: str | None, all_pending: bool, other_side_unchanged: bool) -> int:
+    declared = {entry["id"]: entry for entry in model.entities["ui_actions"]}
+    if ui not in declared or "docs" not in declared[ui]:
+        with_docs = sorted(i for i, e in declared.items() if "docs" in e)
+        out(f"[ERR] ui_action '{ui}' is not declared with 'docs' (with docs: "
+            f"{', '.join(with_docs) or '-'}) -- nothing written")
+        return 2
+    states = _ui_doc_states(model).get(ui, {})
+    unknown = [ident for ident in ids if ident not in states]
+    if unknown:
+        out(f"[ERR] control(s) without both a resolved chain and a help section in ui:{ui}: "
+            f"{', '.join(unknown)} -- nothing written")
+        return 2
+    previous = (lock.get("docs") or {}).get(ui, {})
+    targets = list(ids) if ids else [
+        control for control, state in states.items()
+        if {k: (previous.get(control) or {}).get(k) for k in ("code", "doc")} != state
+    ] if all_pending else []
+    if not targets:
+        if all_pending:
+            out(f"[OK] every help section of ui:{ui} is already attested at its current content")
+            return 0
+        out("[ERR] name the control id(s) to attest, or pass --all for every changed/unattested one")
+        return 2
+    if not reason or not reason.strip():
+        out("[ERR] --reason is required: say what you compared (e.g. \"re-read the export "
+            "handler, the help describes the new file naming\")")
+        return 2
+    # the easy way out of a red control is to attest a code change without touching
+    # its help: refuse unless the caller says the help was re-read and still holds
+    one_sided = [c for c in targets if previous.get(c)
+                 and previous[c].get("code") != states[c]["code"]
+                 and previous[c].get("doc") == states[c]["doc"]]
+    if one_sided and not other_side_unchanged:
+        for control in one_sided:
+            out(f"[REFUSED] ui:{ui} {control}: the code changed, its help section did not.")
+        out("   Update the help first, or -- if you re-read it and it still describes the "
+            "code -- re-run with --other-side-unchanged. Nothing written.")
+        return 1
+    today = datetime.date.today().isoformat()
+    entries = lock.setdefault("docs", {}).setdefault(ui, {})
+    written = 0
+    for control in targets:
+        current = entries.get(control)
+        if current and {k: current.get(k) for k in ("code", "doc")} == states[control]:
+            out(f"[OK] ui:{ui} {control} unchanged since {current['attested_on']} -- nothing to attest")
+            continue
+        entries[control] = {**states[control], "attested_on": today, "reason": reason.strip()}
+        written += 1
+    if written:
+        try:
+            write_lock(cfg, lock)
+        except ModelError as exc:
+            out(f"[ERR] {exc}")
+            return 2
+        out(f"[OK] attested the help of {written} control(s) of ui:{ui}")
         out(f"wrote {cfg.lock_file.as_posix()} -- commit it with the change")
     return 0
 

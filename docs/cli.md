@@ -144,6 +144,7 @@ Records in the lock file that every region of a pair was re-read and agrees.
 | `ids ...` | pair ids |
 | `--reason TEXT` | what you compared (required; lands in the lock file and in review) |
 | `--all` | every changed or unattested pair |
+| `--ui ID` | the ids are controls of ui_action `ID` (with `docs`): attest each control's help section against the code behind it |
 | `--prune` | drop lock entries for pairs the model no longer declares |
 | `--other-side-unchanged` | only some regions changed and you re-read the others: they are already equivalent. Without it, attest refuses when only one side changed |
 

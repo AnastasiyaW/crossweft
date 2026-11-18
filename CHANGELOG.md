@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 (2026-11-18)
+
+- `ui_actions` take `docs`: each control has one help section, and the code
+  behind the control is attested together with that section
+  (`crossweft attest --ui <id>`). A changed handler whose help did not change
+  fails the check (`ui:<id>:doc-stale:...`), as do a control without a section
+  and a section without a control. See docs/model-reference.md.
+- `load_model` takes the repository root as well as a loaded config, so a
+  script that passes the root no longer dies with `'WindowsPath' object has no
+  attribute 'abs'`.
+
 ## 0.4.0 (2026-11-05)
 
 - Signals (`meta.signals`, opt-in): every current HTTP link needs
