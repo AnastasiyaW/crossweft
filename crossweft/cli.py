@@ -299,8 +299,25 @@ def build_parser() -> argparse.ArgumentParser:
                     "request/error/latency per HTTP link, queue depth and age, dead letters, "
                     "synthetic probes per flow and the always-firing watchdog. Exit 1 when a "
                     "current entry lacks a signal it needs, 2 when the map has no meta.signals.",
-        epilog="Example: crossweft signals --out build/signals.json")
+        epilog="Examples: crossweft signals --out build/signals.json; "
+               "crossweft signals --format loki --selector-default "
+               "'{service_name=\"{service}\"}' --out rules/shop.yaml")
     sig.add_argument("--out", help="file to write (default: print to stdout)")
+    sig.add_argument("--format", choices=("json", "loki", "grafana"), default="json",
+                     help="json: the catalog; loki: Loki ruler rule groups; grafana: Grafana "
+                          "alerting provisioning (log-based rules only, see docs/signals.md)")
+    sig.add_argument("--selector", action="append", default=[], metavar="SERVICE=SELECTOR",
+                     help="LogQL stream selector of one service's logs (repeatable)")
+    sig.add_argument("--selector-default", metavar="TEMPLATE",
+                     help="selector for services without --selector, with a {service} placeholder")
+    sig.add_argument("--parser", choices=("json", "logfmt"), default="json",
+                     help="how the log lines are parsed (default json)")
+    sig.add_argument("--status-field", default="status", help="HTTP status field (default status)")
+    sig.add_argument("--route-field", default="route", help="route pattern field (default route)")
+    sig.add_argument("--latency-field", help="request duration field; p95 rules only when given")
+    sig.add_argument("--latency-unit", choices=("ns", "us", "ms", "s"), default="ms",
+                     help="unit of --latency-field (default ms)")
+    sig.add_argument("--datasource-uid", help="Grafana Loki data source uid (--format grafana)")
 
     sub.add_parser("doctor", help="show which installed copy runs and whether another shadows it",
         description="Print the version, the package path and the interpreter, and list every "
@@ -427,7 +444,20 @@ def main(argv: list[str] | None = None) -> int:
         return report_module.run_report(cfg, args.out, args.json)
     if command == "signals":
         from . import signals as signals_module
-        return signals_module.run_signals(cfg, args.out)
+        from . import signals_export
+        selectors = {}
+        for item in args.selector:
+            service, sep, selector = item.partition("=")
+            if not sep or not service.strip():
+                engine.out(f"[ERR] --selector '{item}': expected SERVICE=SELECTOR")
+                return 2
+            selectors[service.strip()] = selector.strip()
+        options = signals_export.LogOptions(
+            selectors=selectors, selector_default=args.selector_default, parser=args.parser,
+            status_field=args.status_field, route_field=args.route_field,
+            latency_field=args.latency_field, latency_unit=args.latency_unit,
+            datasource_uid=args.datasource_uid)
+        return signals_module.run_signals(cfg, args.out, args.format, options)
     if command == "show":
         return engine.run_show(cfg, args.id)
     if command == "actions":

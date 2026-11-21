@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.0 (2026-11-21)
+
+- `crossweft signals --format loki|grafana`: the alarm catalog becomes rules a
+  log store evaluates -- Loki ruler groups or Grafana alerting file
+  provisioning, one Loki query per rule. Heartbeats become `absent_over_time`,
+  `red` links become an error-rate rule (and p95 latency with
+  `--latency-field`), the watchdog fires always. Kinds a log query cannot answer
+  (`health`, `probe`, `queue`, `dlq`) and services without a selector are
+  listed as `[SKIP]` and stay with the alert router. A breach fires one alert:
+  `warn` stops where `crit` starts. Every rule carries `crossweft_rule`,
+  `crossweft_kind` and `crossweft_via` labels so a router can deduplicate. A
+  Grafana watchdog whose query fails goes quiet (`execErrState: OK`), so the
+  datasource-error alert cannot pass for a live watchdog. See the "Rules for
+  Loki and Grafana" section of docs/signals.md.
+
 ## 0.5.0 (2026-11-18)
 
 - `ui_actions` take `docs`: each control has one help section, and the code

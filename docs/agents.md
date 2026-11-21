@@ -262,7 +262,7 @@ GitHub Action (annotates the diff):
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: AnastasiyaW/crossweft@<release commit>  # v0.5.0; a tag can be moved, a commit cannot
+- uses: AnastasiyaW/crossweft@<release commit>  # v0.6.0; a tag can be moved, a commit cannot
 ```
 
 pre-commit:
@@ -270,7 +270,7 @@ pre-commit:
 ```yaml
 repos:
   - repo: https://github.com/AnastasiyaW/crossweft
-    rev: v0.5.0
+    rev: v0.6.0
     hooks:
       - id: crossweft-check
 ```

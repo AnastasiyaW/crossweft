@@ -120,6 +120,47 @@ The catalog depends on the model alone, like `render`. It says *what* to watch;
 the router decides delivery (a chat, e-mail, a pager), deduplication, silences and
 escalation. No Prometheus or Alertmanager is assumed.
 
+## Rules for Loki and Grafana
+
+The same catalog can be turned into rules that a log store evaluates:
+
+```bash
+crossweft signals --format loki --selector-default '{service_name="{service}"}' \
+  --out rules/shop.yaml
+crossweft signals --format grafana --datasource-uid <loki-uid> \
+  --selector api='{container="shop-api"}' --latency-field dur --latency-unit ns \
+  --out provisioning/alerting/shop.yaml
+```
+
+`loki` writes rule groups for the Loki ruler; `grafana` writes Grafana alerting
+file provisioning with one Loki query per rule. Both files are JSON, which is valid
+YAML, so they load as they are.
+
+Only the kinds a log query can answer become rules:
+
+| `kind` | Rule | Needs |
+|---|---|---|
+| `heartbeat` | `absent_over_time` of the line containing `heartbeat:<block>`, `warn` and `crit` | a selector for the block |
+| `red` | errors (`status >= 500`) / requests over the window above the threshold, with at least `min_errors` errors; p95 of the duration field when `--latency-field` is given | a selector for the server block; the log carries the status and route pattern fields |
+| `watchdog` | `vector(1)`: fires always | nothing |
+
+`health`, `probe`, `queue` and `dlq` need an HTTP call or a queue broker. They are
+printed on stderr as `[SKIP]` and stay with the alert router, which reads the JSON
+catalog. A rule whose service has no selector is skipped the same way, with the
+option that would add it.
+
+The selector of a service comes from `--selector SERVICE=SELECTOR`, else from
+`--selector-default` with `{service}` replaced by the block id. Routes of a link
+(`identifiers.route`, `METHOD /path`) become an anchored regex on `--route-field`
+(default `route`), matched against the path pattern the server logs. `--parser`
+picks `json` (default) or `logfmt`.
+
+Every rule carries the labels `severity`, `product`, `service`, `crossweft_rule`
+(the catalog id), `crossweft_kind` and `crossweft_via` (`loki` or `grafana`), so a
+router can deduplicate, look the rule up in the catalog and tell the two watchdogs
+apart. Grafana rules use `noDataState: OK`: each query keeps only the breaches, so
+an empty answer means the condition is false.
+
 ## On the map
 
 `render` draws a bell on every block and link with a signal; the details panel

@@ -196,5 +196,95 @@ class Signals(unittest.TestCase):
         self.assertIn("cannot write", out.getvalue())
 
 
+class Export(Signals):
+    """`--format loki|grafana`: the catalog becomes rules a log store evaluates."""
+
+    def export(self, fmt: str, **options) -> tuple[int, dict, str]:
+        from crossweft import signals_export
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = signals.run_signals(self.cfg(), None, fmt, signals_export.LogOptions(**options))
+        text = out.getvalue()
+        return code, (json.loads(text) if text.startswith("{") else {}), err.getvalue() + text
+
+    def test_loki_rules_cover_the_log_kinds_and_leave_the_rest_to_the_router(self) -> None:
+        code, doc, err = self.export("loki", selector_default='{service_name="{service}"}')
+        self.assertEqual(code, 0)
+        rules = doc["groups"][0]["rules"]
+        kinds = sorted({(r["labels"]["crossweft_rule"], r["labels"]["severity"]) for r in rules})
+        self.assertEqual(kinds, [("heartbeat:worker", "crit"), ("heartbeat:worker", "warn"),
+                                 ("red:web-orders", "crit"), ("red:web-orders", "warn"),
+                                 ("watchdog", "crit")])
+        self.assertIn("[SKIP] health:web:", err)
+        self.assertIn("[SKIP] probe:read-order:", err)
+        beat = next(r for r in rules if r["labels"]["crossweft_rule"] == "heartbeat:worker")
+        self.assertEqual(beat["expr"],
+                         'absent_over_time({service_name="worker"} |= "heartbeat:worker" [6m])'
+                         if beat["labels"]["severity"] == "crit" else beat["expr"])
+        red = next(r for r in rules if r["alert"] == "CrossweftErrorRate")
+        self.assertIn('{service_name="api"} | json | __error__=""', red["expr"])
+        self.assertIn("status >= 500 [10m]", red["expr"])
+        self.assertIn(">= 10)", red["expr"])
+        self.assertTrue(all(r["labels"]["crossweft_via"] == "loki" for r in rules))
+
+    def test_a_service_without_a_selector_is_left_out_with_the_reason(self) -> None:
+        code, doc, err = self.export("loki", selectors={"api": '{app="api"}'})
+        self.assertEqual(code, 0)
+        ids = {r["labels"]["crossweft_rule"] for r in doc["groups"][0]["rules"]}
+        self.assertEqual(ids, {"red:web-orders", "watchdog"})
+        self.assertIn("heartbeat:worker: no log selector for service 'worker'", err)
+
+    def test_routes_become_an_anchored_regex_on_the_route_field(self) -> None:
+        def routes(entities, _data):
+            entities["links"]["web-orders"].setdefault("identifiers", {})["route"] = [
+                "GET /orders/{id}", "POST /orders"]
+        self.model(routes)
+        _code, doc, _err = self.export("loki", selector_default='{s="{service}"}')
+        red = next(r for r in doc["groups"][0]["rules"] if r["alert"] == "CrossweftErrorRate")
+        self.assertIn(r'| route=~"^(/orders|/orders/\\{id\\})$"', red["expr"])
+
+    def test_latency_rules_only_with_a_latency_field(self) -> None:
+        _code, doc, _err = self.export("loki", selector_default='{s="{service}"}',
+                                       latency_field="dur", latency_unit="ns")
+        p95 = [r for r in doc["groups"][0]["rules"] if r["alert"] == "CrossweftLatencyP95"]
+        self.assertEqual(len(p95), 2)
+        self.assertIn("unwrap dur [5m])) > 3e+09", p95[0]["expr"])
+
+    def test_grafana_provisioning_names_the_datasource_and_hashes_uids(self) -> None:
+        code, doc, _err = self.export("grafana", selector_default='{s="{service}"}',
+                                      datasource_uid="loki-main")
+        self.assertEqual(code, 0)
+        rules = doc["groups"][0]["rules"]
+        self.assertEqual(doc["apiVersion"], 1)
+        self.assertTrue(all(len(r["uid"]) <= 40 for r in rules))
+        self.assertEqual(len({r["uid"] for r in rules}), len(rules))
+        self.assertTrue(all(r["data"][0]["datasourceUid"] == "loki-main" for r in rules))
+        self.assertTrue(all(r["noDataState"] == "OK" for r in rules))
+        err_state = {r["labels"]["crossweft_kind"]: r["execErrState"] for r in rules}
+        # a failing watchdog query goes quiet, so the router reports the silence
+        self.assertEqual(err_state["watchdog"], "OK")
+        self.assertEqual(err_state["red"], "Error")
+
+    def test_warn_stops_where_crit_starts(self) -> None:
+        _code, doc, _err = self.export("loki", selector_default='{s="{service}"}',
+                                       latency_field="dur", latency_unit="ns")
+        rules = {(r["alert"], r["labels"]["crossweft_rule"], r["labels"]["severity"]): r["expr"]
+                 for r in doc["groups"][0]["rules"]}
+        beat_warn = rules[("CrossweftHeartbeatMissing", "heartbeat:worker", "warn")]
+        beat_crit = rules[("CrossweftHeartbeatMissing", "heartbeat:worker", "crit")]
+        self.assertTrue(beat_warn.endswith(f" unless {beat_crit}"))
+        self.assertIn("<= ", rules[("CrossweftErrorRate", "red:web-orders", "warn")])
+        self.assertNotIn("<= ", rules[("CrossweftErrorRate", "red:web-orders", "crit")])
+        self.assertIn("<= 1e+10", rules[("CrossweftLatencyP95", "red:web-orders", "warn")])
+
+    def test_bad_options_exit_2_without_output(self) -> None:
+        for fmt, options in (("grafana", {"selector_default": '{s="{service}"}'}),
+                             ("loki", {"selector_default": '{s="x"}'}),
+                             ("loki", {"selectors": {"api": "service_name=api"}}),
+                             ("loki", {"status_field": "status code"})):
+            code, doc, _err = self.export(fmt, **options)
+            self.assertEqual((code, doc), (2, {}), (fmt, options))
+
+
 if __name__ == "__main__":
     unittest.main()

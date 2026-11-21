@@ -312,9 +312,19 @@ on), 2 when the map has no `meta.signals`. Details: [signals.md](signals.md).
 | Flag | Meaning |
 |---|---|
 | `--out PATH` | file to write (default: print to stdout) |
+| `--format json\|loki\|grafana` | `json`: the catalog (default); `loki`: Loki ruler rule groups; `grafana`: Grafana alerting provisioning (log-based rules only) |
+| `--selector SERVICE=SELECTOR` | LogQL stream selector of one service's logs (repeatable) |
+| `--selector-default TEMPLATE` | selector for services without `--selector`, with a `{service}` placeholder |
+| `--parser json\|logfmt` | how the log lines are parsed (default `json`) |
+| `--status-field NAME` | HTTP status field (default `status`) |
+| `--route-field NAME` | route pattern field (default `route`) |
+| `--latency-field NAME` | request duration field; p95 rules only when given |
+| `--latency-unit ns\|us\|ms\|s` | unit of `--latency-field` (default `ms`) |
+| `--datasource-uid UID` | Grafana Loki data source uid (`--format grafana`) |
 
 ```bash
 crossweft signals --out build/signals.json
+crossweft signals --format loki --selector-default '{service_name="{service}"}' --out rules/shop.yaml
 ```
 
 ## `crossweft doctor`

@@ -455,14 +455,15 @@ def catalog(model) -> dict:
             "missing": [{"key": k, "ref": r, "message": m} for k, r, m in missing(model)]}
 
 
-def run_signals(cfg, out_path: str | None) -> int:
-    """Print or write the catalog: 0 complete, 1 an entry lacks a signal it
-    needs (listed under "missing"), 2 the model does not load or has no
-    meta.signals."""
+def run_signals(cfg, out_path: str | None, fmt: str = "json", options=None) -> int:
+    """Print or write the catalog (or, with fmt loki|grafana, the rule file made
+    from it): 0 complete, 1 an entry lacks a signal it needs (listed under
+    "missing"), 2 the model does not load, has no meta.signals, or the export
+    options are wrong."""
     import json
     from pathlib import Path
 
-    from . import engine
+    from . import engine, signals_export
     try:
         model = engine.load_model(cfg)
     except engine.ModelError as exc:
@@ -478,7 +479,19 @@ def run_signals(cfg, out_path: str | None) -> int:
                    "(see docs/signals.md)")
         return 2
     data = catalog(model)
-    text = json.dumps(data, ensure_ascii=False, indent=1) + "\n"
+    document = data
+    if fmt != "json":
+        options = options or signals_export.LogOptions()
+        try:
+            options.validate(fmt)
+        except signals_export.ExportError as exc:
+            engine.out(f"[ERR] signals: {exc}")
+            return 2
+        convert = {"loki": signals_export.to_loki, "grafana": signals_export.to_grafana}[fmt]
+        document, left = convert(data, options)
+        for reason in left:
+            print(f"[SKIP] {reason}", file=sys.stderr)
+    text = json.dumps(document, ensure_ascii=False, indent=1) + "\n"
     if out_path:
         target = Path(out_path).resolve()
         try:
