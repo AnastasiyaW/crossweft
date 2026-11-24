@@ -19,6 +19,15 @@ enforces four contracts:
 
 If any contract breaks, the suite FAILS (exit 1).
 
+A normal run that exits 2 is the three-state "could not check here" answer
+(absence of a signal is not a pass). The row is **UNKNOWN**: it blocks the
+suite like a FAIL, but it is not a finding, and when no row FAILED the suite
+exits 2 instead of 1. A validator may name, in `validators.ci`, the CI job that
+runs it conclusively and the paths it covers; the row then says so, and
+`--report FILE` writes every row as JSON, so a stop hook can decide for itself
+whether that CI result still holds for the change at hand. The runner never
+turns UNKNOWN into green.
+
 A validator may also be legitimately NOT APPLICABLE to the checkout it is
 standing on (e.g. a release-only check running on a development branch). It
 declares that by printing `APPLICABILITY: <reason>` on its normal run, and this
@@ -50,11 +59,13 @@ Usage:
 ASCII-only output (Windows cp1252 safe). Exit 0 = every validator either ran
 real work and passed or declared itself not applicable (reported as SKIP, and
 counted separately in the closing summary); exit 1 = at least one failed / did
-nothing / lacks a self-test.
+nothing / lacks a self-test; exit 2 = nothing failed but at least one validator
+could not check here (UNKNOWN), or the runner itself was misconfigured.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -90,6 +101,9 @@ APPLICABILITY_RE = re.compile(r"^APPLICABILITY:[ \t]*(.*?)[ \t\r]*$", re.MULTILI
 # result and the failure list cannot drift apart.
 PASSING_VERDICTS = ("PASS", "SKIP")
 
+# The three-state convention: a validator exits 2 when it could not perform the check.
+UNKNOWN_EXIT = 2
+
 
 class Result:
     __slots__ = ("name", "self_test", "scanned_files", "scanned_items",
@@ -102,7 +116,7 @@ class Result:
         self.scanned_files = -1
         self.scanned_items = -1
         self.normal_exit = -1
-        self.verdict = "?"          # PASS / SKIP / FAIL
+        self.verdict = "?"          # PASS / SKIP / FAIL / UNKNOWN
         self.detail = ""
         self.failure_output = ""    # bounded captured output for FAIL reporting
         self.applicability = ""     # reason text when the validator declared SKIP
@@ -409,6 +423,14 @@ def evaluate_validator(script: Path, cwd: Path, reuse: "Reuse | None" = None) ->
         return r
     done = nr.done
     r.normal_exit = done.returncode
+    if done.returncode == UNKNOWN_EXIT:
+        # "could not check" needs no SCANNED line: nothing was examined, and saying
+        # so is the honest answer. Not a pass and never kept for reuse.
+        nr.forget()
+        r.verdict = "UNKNOWN"
+        r.detail = "normal run exit 2: the check could not be performed here (not a pass)"
+        r.failure_output = _failure_output(done.stdout, done.stderr)
+        return r
     out = (done.stdout or "") + "\n" + (done.stderr or "")
     m = SCANNED_RE.search(out)
     if m:
@@ -480,7 +502,7 @@ def _print_table(results: list[Result]) -> None:
         if r.verdict == "SKIP":
             _say(f"  {'':<{name_w}}  -> not applicable to this checkout, so it "
                  f"proved nothing here: {r.applicability}")
-        elif r.verdict == "FAIL":
+        elif r.verdict in ("FAIL", "UNKNOWN"):
             for detail_line in _failure_report_lines(r):
                 _say(f"  {'':<{name_w}}  {detail_line}")
 
@@ -517,6 +539,29 @@ def reuse_lines(results: list[Result]) -> list[str]:
 
 class ConfigError(Exception):
     """The runner was configured wrongly (bad env var, stale timeout entry)."""
+
+
+def ci_lines(results: list[Result], ci: dict[str, dict]) -> list[str]:
+    """For each UNKNOWN row: where it runs conclusively, if the config names it."""
+    lines = []
+    for r in results:
+        if r.verdict != "UNKNOWN":
+            continue
+        entry = ci.get(r.name)
+        if entry:
+            lines.append(f"  UNKNOWN {r.name}: CI job '{entry['job']}' runs it conclusively "
+                         f"(covers {', '.join(entry['covers'])})")
+        else:
+            lines.append(f"  UNKNOWN {r.name}: no CI job named for it in validators.ci")
+    return lines
+
+
+def write_report(path: Path, code: int, results: list[Result], ci: dict[str, dict]) -> None:
+    """Every row as JSON, for a hook that must not read verdicts out of prose."""
+    rows = [{"name": r.name, "verdict": r.verdict, "detail": r.detail,
+             "normal_exit": r.normal_exit, "ci": ci.get(r.name)} for r in results]
+    path.write_text(json.dumps({"schema": 1, "exit": code, "validators": rows}, indent=1),
+                    encoding="utf-8")
 
 
 def worker_count(job_count: int) -> int:
@@ -634,6 +679,16 @@ def main(argv):
     if "--self-test" in argv:
         print("[ok] self-test"); print("SELF-TEST: checks=2"); return 0
     print("[UNKNOWN] owner file missing - not checked"); print("SCANNED: files=3 items=3"); return 2
+sys.exit(main(sys.argv[1:]))
+'''
+
+# The common real shape: "could not check" printed and exit 2 before any SCANNED line.
+_UNKNOWN_NO_SCANNED = '''\
+import sys
+def main(argv):
+    if "--self-test" in argv:
+        print("[ok] self-test"); print("SELF-TEST: checks=2"); return 0
+    print("[UNKNOWN] a live service holds the pipe - not checked"); return 2
 sys.exit(main(sys.argv[1:]))
 '''
 
@@ -786,9 +841,11 @@ def _run_self_test() -> int:
               and by["validate_no_selftest.py"].self_test == "MISSING")
         check("validator that exits non-zero on normal run FAILS",
               by["validate_finding.py"].verdict == "FAIL")
-        check("validator exiting 2 (UNKNOWN: could not check) FAILS, never PASS or SKIP",
-              by["validate_unknown.py"].verdict == "FAIL"
+        check("validator exiting 2 is UNKNOWN (could not check), never PASS or SKIP",
+              by["validate_unknown.py"].verdict == "UNKNOWN"
               and by["validate_unknown.py"].normal_exit == 2)
+        check("an UNKNOWN row blocks the suite and is not a passing verdict",
+              "UNKNOWN" not in PASSING_VERDICTS)
         check("validator with a FAILING self-test FAILS",
               by["validate_bad_selftest.py"].verdict == "FAIL"
               and by["validate_bad_selftest.py"].self_test == "FAIL")
@@ -830,6 +887,34 @@ def _run_self_test() -> int:
               by["validate_appl_no_scanned.py"].verdict == "FAIL")
         check("a reasonless bare 'APPLICABILITY:' FAILS (unreadable skip)",
               by["validate_appl_blank.py"].verdict == "FAIL")
+
+        # Exit code of a suite: FAIL wins over UNKNOWN, UNKNOWN is never 0.
+        check("suite exit is 1 when a row failed, even with an UNKNOWN row",
+              _suite_exit(results) == 1)
+        d6 = d / "goodplusunknown"
+        d6.mkdir()
+        (d6 / "validate_good.py").write_text(_GOOD_VALIDATOR, encoding="utf-8")
+        (d6 / "validate_unknown.py").write_text(_UNKNOWN_VALIDATOR, encoding="utf-8")
+        (d6 / "validate_unknown_bare.py").write_text(_UNKNOWN_NO_SCANNED, encoding="utf-8")
+        unk, unk_passed = run_suite(d6, d6)
+        check("good + UNKNOWN validators: the suite does not pass and exits 2",
+              unk_passed is False and _suite_exit(unk) == 2)
+        check("exit 2 without a SCANNED line is still UNKNOWN, not a hidden FAIL",
+              {r.name: r.verdict for r in unk}["validate_unknown_bare.py"] == "UNKNOWN")
+        ci_cfg = {"validate_unknown.py": {"job": "Drain (Windows)", "covers": ["native/**"]}}
+        said = " ".join(ci_lines(unk, ci_cfg))
+        check("an UNKNOWN row names its CI job when validators.ci declares one",
+              "Drain (Windows)" in said and "native/**" in said
+              and "validate_unknown_bare.py: no CI job" in said)
+        rp = d / "report.json"
+        write_report(rp, 2, unk, ci_cfg)
+        data = json.loads(rp.read_text(encoding="utf-8"))
+        rows = {row["name"]: row for row in data["validators"]}
+        check("the JSON report carries exit, verdicts and the declared CI job",
+              data["schema"] == 1 and data["exit"] == 2
+              and rows["validate_unknown.py"]["verdict"] == "UNKNOWN"
+              and rows["validate_unknown.py"]["ci"]["job"] == "Drain (Windows)"
+              and rows["validate_good.py"]["ci"] is None)
 
         # And a directory of ONLY the good validator must pass overall.
         d2 = d / "onlygood"
@@ -941,12 +1026,18 @@ def _run_self_test() -> int:
 
 def run_validators(root: Path, directory: Path, timeout: int = DEFAULT_TIMEOUT,
                    timeouts: dict[str, int] | None = None,
-                   exclude: dict[str, str] | None = None, incremental: bool = False) -> int:
+                   exclude: dict[str, str] | None = None, incremental: bool = False,
+                   ci: dict[str, dict] | None = None, report: Path | None = None) -> int:
     """Run the suite in `directory` with the repository root as cwd.
 
     `exclude` maps file names to the reason they are not suite validators (for
     example a commit-time gate kept in the same directory). They are listed with
-    that reason, never dropped silently, and an entry naming no file is an error."""
+    that reason, never dropped silently, and an entry naming no file is an error.
+
+    `ci` maps a validator to the CI job that runs it conclusively and the paths it
+    covers (validators.ci); `report` receives every row as JSON once the suite ran.
+    No report is written when the suite did not run, so a missing report never
+    reads as a result."""
     if not directory.is_dir():
         _say(f"[ERR] validators directory {directory} does not exist -- nothing ran.",
              file=sys.stderr)
@@ -964,6 +1055,12 @@ def run_validators(root: Path, directory: Path, timeout: int = DEFAULT_TIMEOUT,
     if stale:
         # an override for a validator that no longer exists (or is excluded) is a rotting allowlist
         _say(f"[ERR] validators.timeouts names validator(s) that do not exist or are "
+             f"excluded: {', '.join(stale)} -- remove them", file=sys.stderr)
+        return 1
+    ci = ci or {}
+    stale = sorted(set(ci) - names)
+    if stale:
+        _say(f"[ERR] validators.ci names validator(s) that do not exist or are "
              f"excluded: {', '.join(stale)} -- remove them", file=sys.stderr)
         return 1
     if not scripts:
@@ -1001,15 +1098,33 @@ def run_validators(root: Path, directory: Path, timeout: int = DEFAULT_TIMEOUT,
         reuse.store.save()
         for line in reuse_lines(results):
             _say(line)
-    failed = [r for r in results if r.verdict not in PASSING_VERDICTS]
+    code = _suite_exit(results)
+    if report is not None:
+        write_report(report, code, results, ci)
+    failed = [r for r in results if r.verdict not in PASSING_VERDICTS + ("UNKNOWN",)]
+    unknown = [r for r in results if r.verdict == "UNKNOWN"]
     _say()
     if failed:
         _say(f"FAIL: {len(failed)} of {len(results)} validator(s) did not pass. "
              "A validator that scanned nothing, lacks/fails --self-test, or "
              "reported a finding blocks the build.", file=sys.stderr)
-        return 1
+    if unknown:
+        _say(f"UNKNOWN: {len(unknown)} of {len(results)} validator(s) could not check here "
+             "(exit 2). That is not a pass and blocks the build.", file=sys.stderr)
+        for line in ci_lines(results, ci):
+            _say(line, file=sys.stderr)
+    if code:
+        return code
     # Never say "all N ran real work" while some declared themselves not
     # applicable -- that is the claim a skip must not be able to buy.
     for line in summary_lines(results):
         _say(line)
     return 0
+
+
+def _suite_exit(results: list[Result]) -> int:
+    """1 when any row failed, else 2 when any could not check, else 0."""
+    verdicts = {r.verdict for r in results}
+    if verdicts - set(PASSING_VERDICTS) - {"UNKNOWN"}:
+        return 1
+    return 2 if "UNKNOWN" in verdicts else 0

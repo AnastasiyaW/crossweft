@@ -262,6 +262,9 @@ def build_parser() -> argparse.ArgumentParser:
     val.add_argument("--incremental", action="store_true",
                      help="reuse a phase that passed last time when nothing it read changed "
                           "(for the stop hook; CI runs everything)")
+    val.add_argument("--report", metavar="FILE",
+                     help="also write every row (verdict, detail, the validators.ci entry) as "
+                          "JSON to FILE once the suite ran")
 
     hook = sub.add_parser("hook", help="agent hook adapter (reads the agent's JSON on stdin)",
         description="Agent hook adapter: read the agent's JSON on stdin and answer in that "
@@ -503,6 +506,7 @@ def main(argv: list[str] | None = None) -> int:
             directory = cfg.root / directory
         return runner.run_validators(cfg.root, directory, cfg.validator_timeout,
                                      cfg.validator_timeouts, cfg.validator_exclude,
-                                     incremental=args.incremental)
+                                     incremental=args.incremental, ci=cfg.validator_ci,
+                                     report=Path(args.report) if args.report else None)
     parser.print_help()
     return 2

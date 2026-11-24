@@ -223,13 +223,16 @@ crossweft render
 ## `crossweft validators`
 
 Runs every `validate_*.py` and fails any validator that scanned nothing, lacks
-a real self-test, or reports a finding. Details: [validators.md](validators.md).
+a real self-test, or reports a finding. A validator that exits 2 could not check
+here: its row is UNKNOWN, which also blocks; with no failed row the exit is 2.
+Details: [validators.md](validators.md).
 
 | Flag | Meaning |
 |---|---|
 | `--dir DIR` | validators directory (default `validators.dir` in `crossweft.json`) |
 | `--self-test` | prove the runner itself works |
 | `--incremental` | reuse a self-test or normal run that passed last time when nothing it read, listed, checked or asked git has changed (kept in the git directory; see [validators.md](validators.md#incremental-runs-the-stop-hook)). For the stop hook; CI runs plain `validators` |
+| `--report FILE` | once the suite ran, write every row (name, verdict, detail, exit, its `validators.ci` entry) as JSON to FILE, for a hook that must not read verdicts from the text |
 
 ```bash
 crossweft validators

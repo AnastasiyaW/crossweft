@@ -37,6 +37,35 @@ A validator that is legitimately not applicable to this checkout prints
 after the three contracts above held. A bare `APPLICABILITY:` without a reason
 fails.
 
+A normal run that exits **2** says "I could not check here" (a live service holds
+the resource the test needs, a tool is missing on this machine). The row is
+**UNKNOWN**: no `SCANNED:` line is required, it is never reused by
+`--incremental`, and it blocks the suite like a failure. When no row failed, the
+suite exits 2 instead of 1, so a caller can tell "nothing was wrong, something was
+not checked" from "something is wrong". UNKNOWN is never reported as a pass.
+
+When a validator can only check conclusively somewhere else -- a CI job on a
+machine that has what this one lacks -- name that job and the paths whose change
+makes its result stale:
+
+```json
+"validators": {
+  "dir": "scripts/validators",
+  "ci": {
+    "validate_drain.py": {"job": "Drain suite (Windows)",
+                          "covers": ["native/**", "tests/drain/**"]}
+  }
+}
+```
+
+An UNKNOWN row then names the job and its paths. `--report FILE` writes every
+row (name, verdict, detail, exit, the `ci` entry) as JSON once the suite ran;
+nothing is written when it did not. crossweft itself does not read CI results and
+never turns UNKNOWN into a pass: the report is for a stop hook that checks, for
+the change at hand, that no covered path changed and that the named job passed
+on the commit the change starts from. An entry naming a validator that does not
+exist (or is excluded) is an error, as is an entry without `job` or `covers`.
+
 Validators run in parallel (`CROSSWEFT_JOBS=1` forces serial; an invalid value
 is an error, not a default). Rows are always reported in name order.
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 (2026-11-24)
+
+- `crossweft validators`: a normal run that exits 2 ("could not check here") is
+  reported as **UNKNOWN** instead of a failed finding, needs no `SCANNED:` line,
+  and still blocks the suite; with no failed row the suite exits 2 instead of 1.
+  `validators.ci` names, per validator, the CI job that runs it conclusively and
+  the paths it covers; an UNKNOWN row says so. `--report FILE` writes every row
+  as JSON for a stop hook. See the contract in docs/validators.md.
+
 ## 0.6.0 (2026-11-21)
 
 - `crossweft signals --format loki|grafana`: the alarm catalog becomes rules a

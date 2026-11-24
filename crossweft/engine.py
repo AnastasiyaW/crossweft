@@ -1064,6 +1064,7 @@ class Config:
     validator_timeout: int = 120
     validator_timeouts: dict = dataclasses.field(default_factory=dict)
     validator_exclude: dict = dataclasses.field(default_factory=dict)
+    validator_ci: dict = dataclasses.field(default_factory=dict)
     discover_exclude: list = dataclasses.field(default_factory=list)
     joints_dir: Path | None = None
     joints_sources: list = dataclasses.field(default_factory=list)
@@ -1113,6 +1114,30 @@ def find_repo_root(start: Path) -> Path:
             return candidate
     raise ModelError(f"no {CONFIG_FILE} at or above {start} -- run `crossweft init` in the "
                      "repository root, or pass --root")
+
+
+def _validator_ci(raw) -> dict:
+    """validators.ci: {"validate_x.py": {"job": "<CI job name>", "covers": ["<glob>", ...]}}.
+    The job runs the validator conclusively where this checkout cannot; `covers` are the
+    repository paths (globs, `**` for any depth) whose change makes that CI result stale."""
+    where = f"{CONFIG_FILE}: validators.ci"
+    if not isinstance(raw, dict):
+        raise ModelError(f"{where} must map validator file names to {{job, covers}}")
+    out = {}
+    for name, entry in raw.items():
+        if not isinstance(name, str) or not name or not isinstance(entry, dict):
+            raise ModelError(f"{where} must map validator file names to {{job, covers}}")
+        extra = set(entry) - {"job", "covers"}
+        if extra:
+            raise ModelError(f"{where}.{name} has unknown keys {sorted(extra)}")
+        job, covers = entry.get("job"), entry.get("covers")
+        if not isinstance(job, str) or not job.strip():
+            raise ModelError(f"{where}.{name}.job must be the CI job's name (non-empty)")
+        if (not isinstance(covers, list) or not covers
+                or not all(isinstance(c, str) and c.strip() for c in covers)):
+            raise ModelError(f"{where}.{name}.covers must be a non-empty list of path globs")
+        out[name] = {"job": job.strip(), "covers": [c.strip() for c in covers]}
+    return out
 
 
 def load_config(root: Path) -> Config:
@@ -1203,7 +1228,7 @@ def load_config(root: Path) -> Config:
         if not isinstance(agent["harness"], bool):
             raise ModelError(f"{CONFIG_FILE}: agent.harness must be true/false")
         cfg.agent_harness = agent["harness"]
-    validators = sub_object("validators", {"dir", "timeout", "timeouts", "exclude"})
+    validators = sub_object("validators", {"dir", "timeout", "timeouts", "exclude", "ci"})
     if "dir" in validators:
         cfg.validators_dir = rel_path("validators.dir", validators["dir"])
     if "timeout" in validators:
@@ -1227,6 +1252,8 @@ def load_config(root: Path) -> Config:
             raise ModelError(f"{CONFIG_FILE}: validators.exclude must map file names to the "
                              "reason they are not run (a non-empty string)")
         cfg.validator_exclude = dict(exclude)
+    if "ci" in validators:
+        cfg.validator_ci = _validator_ci(validators["ci"])
     discover = sub_object("discover", {"exclude"})
     if "exclude" in discover:
         exclude = discover["exclude"]

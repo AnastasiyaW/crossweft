@@ -374,6 +374,83 @@ class ValidatorExclude(unittest.TestCase):
                     engine.load_config(root)
 
 
+class ValidatorUnknownAndCi(unittest.TestCase):
+    """Exit 2 is UNKNOWN (blocks, exit 2 when nothing failed); validators.ci and --report."""
+
+    def repo(self, tmp: str, ci=None) -> Path:
+        root = Path(tmp)
+        (root / "v").mkdir()
+        (root / "v" / "validate_good.py").write_text(GOOD_VALIDATOR, encoding="utf-8")
+        (root / "v" / "validate_gate.py").write_text(
+            "import sys\nif '--self-test' in sys.argv:\n"
+            "    print('SELF-TEST: checks=1'); sys.exit(0)\n" + BROKEN_GATE, encoding="utf-8")
+        cfg = {"dir": "v"}
+        if ci is not None:
+            cfg["ci"] = ci
+        (root / "crossweft.json").write_text(json.dumps({"validators": cfg}), encoding="utf-8")
+        return root
+
+    def run_cli(self, root: Path, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-m", "crossweft", "validators", *extra],
+                              cwd=root, capture_output=True, text=True, env=subprocess_env())
+
+    def test_unknown_blocks_with_exit_2_and_the_report_names_the_ci_job(self) -> None:
+        ci = {"validate_gate.py": {"job": "Gate (Windows)", "covers": ["native/**"]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.repo(tmp, ci)
+            report = root / "report.json"
+            proc = self.run_cli(root, "--report", str(report))
+            self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+            self.assertIn("UNKNOWN", proc.stdout)
+            self.assertIn("CI job 'Gate (Windows)' runs it conclusively", proc.stderr)
+            data = json.loads(report.read_text(encoding="utf-8"))
+            rows = {row["name"]: row for row in data["validators"]}
+            self.assertEqual(data["exit"], 2)
+            self.assertEqual(rows["validate_gate.py"]["verdict"], "UNKNOWN")
+            self.assertEqual(rows["validate_gate.py"]["ci"], ci["validate_gate.py"])
+            self.assertEqual(rows["validate_good.py"]["verdict"], "PASS")
+
+    def test_a_finding_still_exits_1_next_to_an_unknown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.repo(tmp)
+            (root / "v" / "validate_bad.py").write_text(
+                "import sys\nif '--self-test' in sys.argv:\n"
+                "    print('SELF-TEST: checks=1'); sys.exit(0)\n"
+                "print('SCANNED: files=1 items=1'); sys.exit(1)\n", encoding="utf-8")
+            report = root / "report.json"
+            proc = self.run_cli(root, "--report", str(report))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["exit"], 1)
+
+    def test_no_report_when_the_suite_did_not_run(self) -> None:
+        ci = {"validate_gone.py": {"job": "Gate", "covers": ["x/**"]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.repo(tmp, ci)
+            report = root / "report.json"
+            proc = self.run_cli(root, "--report", str(report))
+            self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+            self.assertIn("validators.ci names validator(s) that do not exist", proc.stderr)
+            self.assertFalse(report.exists())
+
+    def test_a_malformed_ci_entry_is_refused_by_the_config(self) -> None:
+        from crossweft import engine
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for bad in (["validate_gate.py"], {"validate_gate.py": "Gate"},
+                        {"validate_gate.py": {"job": "", "covers": ["x/**"]}},
+                        {"validate_gate.py": {"job": "Gate", "covers": []}},
+                        {"validate_gate.py": {"job": "Gate"}},
+                        {"validate_gate.py": {"job": "Gate", "covers": ["x"], "if": "y"}}):
+                (root / "crossweft.json").write_text(
+                    json.dumps({"validators": {"dir": "v", "ci": bad}}), encoding="utf-8")
+                with self.assertRaises(engine.ModelError, msg=repr(bad)):
+                    engine.load_config(root)
+            (root / "crossweft.json").write_text(json.dumps({"validators": {"dir": "v", "ci": {
+                "validate_gate.py": {"job": " Gate ", "covers": ["x/**"]}}}}), encoding="utf-8")
+            self.assertEqual(engine.load_config(root).validator_ci,
+                             {"validate_gate.py": {"job": "Gate", "covers": ["x/**"]}})
+
+
 class ValidatorTimeout(unittest.TestCase):
     def test_timeout_kills_the_validator_and_its_children(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
